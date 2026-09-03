@@ -1,9 +1,11 @@
+use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::model::{EngineCommand, EngineEvent, RawInputEvent, Win32Command};
+use crate::platform::{InputInjector, ScreenCapture, Sleeper, WindowManager};
 
 /// GUI-side handle: send commands, drain events once per frame.
 pub struct EngineHandle {
@@ -13,6 +15,11 @@ pub struct EngineHandle {
 }
 
 impl EngineHandle {
+    /// Handle over externally owned channels, used by the GUI's fake engine in development.
+    pub fn from_channels(cmd_tx: Sender<EngineCommand>, evt_rx: Receiver<EngineEvent>) -> Self {
+        Self { cmd_tx, evt_rx, thread: None }
+    }
+
     pub fn send(&self, cmd: EngineCommand) {
         if self.cmd_tx.send(cmd).is_err() {
             log::warn!("engine thread is gone");
@@ -38,7 +45,12 @@ impl Drop for EngineHandle {
 pub struct EngineDeps {
     pub raw_rx: Receiver<RawInputEvent>,
     pub win32_tx: Sender<Win32Command>,
+    /// Wakes the GUI after an event was sent.
     pub repaint: Box<dyn Fn() + Send + Sync>,
+    pub injector: Arc<dyn InputInjector>,
+    pub capture: Arc<dyn ScreenCapture>,
+    pub windows: Arc<dyn WindowManager>,
+    pub sleeper: Arc<dyn Sleeper>,
 }
 
 /// Spawns the engine thread. Placeholder until recorder and player land: answers every command with an error.
@@ -46,7 +58,7 @@ pub fn spawn_engine(deps: EngineDeps) -> Result<EngineHandle> {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<EngineCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
     let thread = std::thread::Builder::new().name("engine".into()).spawn(move || {
-        let EngineDeps { raw_rx, win32_tx, repaint } = deps;
+        let EngineDeps { raw_rx, win32_tx, repaint, .. } = deps;
         loop {
             crossbeam_channel::select! {
                 recv(cmd_rx) -> cmd => match cmd {

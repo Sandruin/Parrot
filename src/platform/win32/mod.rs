@@ -1,4 +1,7 @@
+pub mod capture;
 pub mod dpi;
+pub mod injector;
+pub mod window;
 
 use std::thread::JoinHandle;
 
