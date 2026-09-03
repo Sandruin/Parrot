@@ -5,8 +5,9 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use image::RgbaImage;
 
+use crate::engine::matcher;
 use crate::engine::scheduler::Scheduler;
-use crate::engine::{matcher, text_match};
+use crate::engine::text_match::{self, TextNeedle};
 use crate::model::{
     Action, ButtonEvent, ImageMatchMode, Key, Macro, MacroSettings, MouseButton, MousePathMode,
     PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMode, vk,
@@ -18,6 +19,8 @@ pub type ProgressFn = Box<dyn FnMut(usize, u32) + Send>;
 
 const CLICK_HOLD_MS: f64 = 30.0;
 const FILE_POLL_MS: f64 = 250.0;
+/// Characters that turn a `WaitForFile` path into a glob pattern.
+const GLOB_CHARS: [char; 3] = ['*', '?', '['];
 /// Longest recognised text quoted in a `WaitForText` timeout error.
 const READ_TEXT_LIMIT: usize = 200;
 
@@ -58,8 +61,9 @@ struct ImageWait {
 /// What `WaitForText` and `ClickOnText` search for, shared by both.
 struct TextWait<'a> {
     region: Rect,
+    /// The search text as the user wrote it, quoted in the timeout error.
     text: &'a str,
-    case_sensitive: bool,
+    needle: &'a TextNeedle,
     poll_ms: u32,
     timeout_ms: u32,
 }
@@ -229,11 +233,12 @@ impl Player {
                 };
                 return self.wait_for_image(&spec, &template, sched);
             }
-            Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms, .. } => {
+            Action::WaitForText { region, text, case_sensitive, match_mode, poll_ms, timeout_ms } => {
+                let needle = TextNeedle::new(text, *match_mode, *case_sensitive)?;
                 let spec = TextWait {
                     region: *region,
                     text,
-                    case_sensitive: *case_sensitive,
+                    needle: &needle,
                     poll_ms: *poll_ms,
                     timeout_ms: *timeout_ms,
                 };
@@ -241,11 +246,12 @@ impl Player {
                     return Ok(Flow::Stopped);
                 }
             }
-            Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms, .. } => {
+            Action::ClickOnText { region, text, case_sensitive, match_mode, button, poll_ms, timeout_ms } => {
+                let needle = TextNeedle::new(text, *match_mode, *case_sensitive)?;
                 let spec = TextWait {
                     region: *region,
                     text,
-                    case_sensitive: *case_sensitive,
+                    needle: &needle,
                     poll_ms: *poll_ms,
                     timeout_ms: *timeout_ms,
                 };
@@ -336,7 +342,7 @@ impl Player {
             }
             let shot = self.deps.capture.capture(spec.region).context("capturing region")?;
             let lines = self.deps.ocr.recognize(&shot).context("reading text")?;
-            if let Some(found) = text_match::find_text(&lines, spec.text, spec.case_sensitive) {
+            if let Some(found) = text_match::find_text(&lines, spec.needle) {
                 sched.resync();
                 return Ok(Some(found));
             }
@@ -359,16 +365,19 @@ impl Player {
         sched.resync();
         let start = sched.now();
         let timeout = Duration::from_millis(timeout_ms as u64);
-        let target = std::path::Path::new(path);
+        let is_pattern = path.contains(GLOB_CHARS);
         loop {
             if self.ctl.is_stopped() {
                 return Ok(Flow::Stopped);
             }
-            if target.exists() {
+            if file_present(path, is_pattern)? {
                 sched.resync();
                 return Ok(Flow::Continue);
             }
             if timeout_ms > 0 && sched.now().saturating_duration_since(start) >= timeout {
+                if is_pattern {
+                    bail!("no file matching {path:?} appeared within {timeout_ms} ms");
+                }
                 bail!("file {path:?} did not appear within {timeout_ms} ms");
             }
             if let Flow::Stopped = self.wait(FILE_POLL_MS, sched) {
@@ -443,6 +452,15 @@ impl Player {
             let _ = self.deps.injector.key(key, false);
         }
     }
+}
+
+/// Whether the waited path exists, or whether any entry matches it when it is a glob pattern.
+fn file_present(path: &str, is_pattern: bool) -> Result<bool> {
+    if !is_pattern {
+        return Ok(std::path::Path::new(path).exists());
+    }
+    let entries = glob::glob(path).with_context(|| format!("invalid file pattern {path:?}"))?;
+    Ok(entries.flatten().next().is_some())
 }
 
 /// Shortens `text` to `max_chars` characters, marking the cut with an ellipsis.

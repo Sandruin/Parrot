@@ -16,12 +16,15 @@ use std::time::{Duration, Instant};
 
 use crate::engine::EngineHandle;
 use crate::model::{
-    Action, ActionId, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro, PlaybackOutcome,
+    Action, ActionId, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro, PlaybackOutcome, Point,
 };
 use crate::platform::{ScreenCapture, WindowManager};
 
 /// How often the foreground window's elevation is re-checked.
 const ELEVATION_INTERVAL: Duration = Duration::from_secs(1);
+
+/// How often the cursor is re-read while a cursor-anchored overlay is up.
+const CURSOR_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Platform services the GUI itself needs, cloned from the ones the engine runs on.
 #[derive(Clone)]
@@ -97,6 +100,9 @@ pub struct App {
     pub elevation_warning: bool,
     elevation_checked: Option<Instant>,
     overlay_sent: Option<Action>,
+    /// Cursor position the overlay scene currently on screen was drawn from.
+    overlay_anchor: Option<Point>,
+    anchor_checked: Option<Instant>,
     title: String,
     wake_until: Option<Instant>,
 }
@@ -133,6 +139,8 @@ impl App {
             elevation_warning: false,
             elevation_checked: None,
             overlay_sent: None,
+            overlay_anchor: None,
+            anchor_checked: None,
             title: String::new(),
             wake_until: None,
         }
@@ -331,11 +339,35 @@ impl App {
         }
         match &wanted {
             Some(action) => {
-                self.engine.send(EngineCommand::ShowOverlay(overlay_scene::for_action(action)));
+                let cursor = overlay_scene::cursor_pos();
+                self.overlay_anchor = Some(cursor);
+                self.engine.send(EngineCommand::ShowOverlay(overlay_scene::for_action_from(action, cursor)));
             }
-            None => self.engine.send(EngineCommand::HideOverlay),
+            None => {
+                self.overlay_anchor = None;
+                self.engine.send(EngineCommand::HideOverlay);
+            }
         }
+        self.anchor_checked = Some(Instant::now());
         self.overlay_sent = wanted;
+    }
+
+    /// Redraws the relative-move overlay as the cursor wanders, since its path starts there.
+    fn follow_cursor(&mut self, ctx: &egui::Context) {
+        let Some(action @ Action::MouseMoveRelative { .. }) = self.overlay_sent.clone() else {
+            return;
+        };
+        ctx.request_repaint_after(CURSOR_INTERVAL);
+        if self.anchor_checked.is_some_and(|at| at.elapsed() < CURSOR_INTERVAL) {
+            return;
+        }
+        self.anchor_checked = Some(Instant::now());
+        let cursor = overlay_scene::cursor_pos();
+        if self.overlay_anchor.is_some_and(|anchor| !overlay_scene::cursor_moved(anchor, cursor)) {
+            return;
+        }
+        self.overlay_anchor = Some(cursor);
+        self.engine.send(EngineCommand::ShowOverlay(overlay_scene::for_action_from(&action, cursor)));
     }
 
     fn sync_title(&mut self, ctx: &egui::Context) {
@@ -383,6 +415,7 @@ impl eframe::App for App {
             self.handle_event(event);
         }
         self.sync_overlay();
+        self.follow_cursor(ctx);
         self.sync_title(ctx);
         self.poll_elevation();
 

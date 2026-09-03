@@ -171,9 +171,9 @@ pub fn demo_doc() -> Macro {
         (
             Action::WaitForText {
                 region: Rect::new(100, 100, 400, 40),
-                text: "Ready".into(),
+                text: "Ready|Done".into(),
                 case_sensitive: false,
-                match_mode: crate::model::TextMatch::Contains,
+                match_mode: crate::model::TextMatch::Regex,
                 poll_ms: 500,
                 timeout_ms: 8_000,
             },

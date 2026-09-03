@@ -7,7 +7,7 @@ use image::{Rgba, RgbaImage};
 use macro_recorder::engine::player::{Player, PlayerDeps, ProgressFn};
 use macro_recorder::model::{
     Action, ActionItem, ButtonEvent, ImageMatchMode, Key, Macro, MacroSettings, MouseButton, MousePathMode,
-    PathPoint, PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMode, TimeUnit,
+    PathPoint, PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMatch, TextMode, TimeUnit,
 };
 use macro_recorder::platform::mock::{
     InjectedCall, MockCapture, MockInjector, MockOcr, MockSleeper, MockWindowManager,
@@ -102,6 +102,14 @@ fn ocr_line(text: &str, words: &[(&str, Rect)]) -> OcrLine {
         text: text.into(),
         words: words.iter().map(|(t, rect)| OcrWord { text: (*t).into(), rect: *rect }).collect(),
     }
+}
+
+/// Fresh directory under the system temp dir, unique per call so parallel tests cannot collide.
+fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("macro-recorder-{tag}-{stamp}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn png_of(img: &RgbaImage) -> Vec<u8> {
@@ -406,7 +414,7 @@ fn wait_for_text_matches_and_quotes_the_read_text_on_timeout() {
         region,
         text: "export FINISHED".into(),
         case_sensitive: false,
-        match_mode: macro_recorder::model::TextMatch::Contains,
+        match_mode: TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 1_000,
     }]);
@@ -418,7 +426,7 @@ fn wait_for_text_matches_and_quotes_the_read_text_on_timeout() {
         region,
         text: "cancelled".into(),
         case_sensitive: false,
-        match_mode: macro_recorder::model::TextMatch::Contains,
+        match_mode: TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 200,
     }]);
@@ -442,7 +450,7 @@ fn a_long_read_is_truncated_in_the_timeout_error() {
         region: Rect::new(0, 0, 48, 16),
         text: "ready".into(),
         case_sensitive: false,
-        match_mode: macro_recorder::model::TextMatch::Contains,
+        match_mode: TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 50,
     }]);
@@ -467,7 +475,7 @@ fn click_on_text_clicks_the_centre_of_the_match_in_screen_pixels() {
         region,
         text: "save as".into(),
         case_sensitive: false,
-        match_mode: macro_recorder::model::TextMatch::Contains,
+        match_mode: TextMatch::Contains,
         button: MouseButton::Right,
         poll_ms: 50,
         timeout_ms: 1_000,
@@ -486,9 +494,7 @@ fn click_on_text_clicks_the_centre_of_the_match_in_screen_pixels() {
 
 #[test]
 fn wait_for_file_sees_an_existing_path_and_times_out_on_a_missing_one() {
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("macro-recorder-wait-for-file-{stamp}"));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = unique_temp_dir("wait-for-file");
     let present = dir.join("ready.txt");
     std::fs::write(&present, b"ok").unwrap();
 
@@ -515,6 +521,157 @@ fn wait_for_file_sees_an_existing_path_and_times_out_on_a_missing_one() {
         other => panic!("expected a timeout failure, got {other:?}"),
     }
     assert_eq!(slept, Duration::from_millis(750));
+}
+
+#[test]
+fn wait_for_text_in_regex_mode_matches_a_pattern() {
+    let h = Harness::new();
+    h.reads(vec![ocr_line(
+        "Copied 1024 files",
+        &[
+            ("Copied", Rect::new(2, 2, 24, 8)),
+            ("1024", Rect::new(28, 2, 18, 8)),
+            ("files", Rect::new(48, 2, 20, 8)),
+        ],
+    )]);
+    let m = macro_of(vec![Action::WaitForText {
+        region: Rect::new(0, 0, 48, 16),
+        text: r"^Copied \d{3,} files$".into(),
+        case_sensitive: false,
+        match_mode: TextMatch::Regex,
+        poll_ms: 50,
+        timeout_ms: 1_000,
+    }]);
+    assert_eq!(h.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(h.sleeper.total_slept(), Duration::ZERO);
+    assert_eq!(*h.ocr.calls.lock().unwrap(), 1);
+
+    let never = macro_of(vec![Action::WaitForText {
+        region: Rect::new(0, 0, 48, 16),
+        text: r"\d{5,}".into(),
+        case_sensitive: false,
+        match_mode: TextMatch::Regex,
+        poll_ms: 50,
+        timeout_ms: 200,
+    }]);
+    match h.run(&never) {
+        PlaybackOutcome::Failed { index, error } => {
+            assert_eq!(index, 0);
+            assert!(error.contains(r"\\d{5,}"), "{error}");
+            assert!(error.contains("Copied 1024 files"), "{error}");
+        }
+        other => panic!("expected a timeout failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn an_invalid_regex_fails_the_action_before_any_polling() {
+    let h = Harness::new();
+    h.reads(vec![ocr_line("ready", &[("ready", Rect::new(0, 0, 20, 8))])]);
+    let m = macro_of(vec![Action::WaitForText {
+        region: Rect::new(0, 0, 48, 16),
+        text: "(unclosed".into(),
+        case_sensitive: false,
+        match_mode: TextMatch::Regex,
+        poll_ms: 50,
+        timeout_ms: 5_000,
+    }]);
+    match h.run(&m) {
+        PlaybackOutcome::Failed { index, error } => {
+            assert_eq!(index, 0);
+            assert!(error.contains("(unclosed"), "{error}");
+        }
+        other => panic!("expected an immediate failure, got {other:?}"),
+    }
+    assert_eq!(h.sleeper.total_slept(), Duration::ZERO);
+    assert_eq!(*h.ocr.calls.lock().unwrap(), 0);
+}
+
+#[test]
+fn click_on_text_in_regex_mode_clicks_the_matched_part_of_the_line() {
+    let region = Rect::new(100, 50, 200, 40);
+    let h = Harness::new().with_screen(400, 200);
+    h.reads(vec![ocr_line(
+        "Total: 42 EUR",
+        &[
+            ("Total:", Rect::new(10, 4, 40, 12)),
+            ("42", Rect::new(54, 4, 16, 12)),
+            ("EUR", Rect::new(74, 4, 26, 12)),
+        ],
+    )]);
+    let m = macro_of(vec![Action::ClickOnText {
+        region,
+        text: r"\d+".into(),
+        case_sensitive: true,
+        match_mode: TextMatch::Regex,
+        button: MouseButton::Left,
+        poll_ms: 50,
+        timeout_ms: 1_000,
+    }]);
+    assert_eq!(h.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(
+        h.calls(),
+        vec![
+            InjectedCall::MoveAbs(Point::new(162, 60)),
+            InjectedCall::Button { button: MouseButton::Left, down: true },
+            InjectedCall::Button { button: MouseButton::Left, down: false },
+        ]
+    );
+}
+
+#[test]
+fn wait_for_file_accepts_a_glob_pattern() {
+    let dir = unique_temp_dir("wait-for-file-glob");
+    std::fs::write(dir.join("report-2026-09.csv"), b"ok").unwrap();
+
+    let h = Harness::new();
+    let found = macro_of(vec![Action::WaitForFile {
+        path: dir.join("report-*.csv").to_string_lossy().into_owned(),
+        timeout_ms: 1_000,
+    }]);
+    let found_outcome = h.run(&found);
+    let found_slept = h.sleeper.total_slept();
+
+    let never = macro_of(vec![Action::WaitForFile {
+        path: dir.join("missing-*.csv").to_string_lossy().into_owned(),
+        timeout_ms: 600,
+    }]);
+    let never_outcome = h.run(&never);
+    let slept = h.sleeper.total_slept();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(found_outcome, PlaybackOutcome::Completed);
+    assert_eq!(found_slept, Duration::ZERO);
+    match never_outcome {
+        PlaybackOutcome::Failed { index, error } => {
+            assert_eq!(index, 0);
+            assert!(error.contains("missing-*.csv"), "{error}");
+        }
+        other => panic!("expected a timeout failure, got {other:?}"),
+    }
+    assert!(slept >= Duration::from_millis(600), "{slept:?}");
+}
+
+#[test]
+fn an_invalid_glob_pattern_fails_without_waiting() {
+    let dir = unique_temp_dir("wait-for-file-bad-glob");
+    let h = Harness::new();
+    let m = macro_of(vec![Action::WaitForFile {
+        path: dir.join("[unterminated").to_string_lossy().into_owned(),
+        timeout_ms: 5_000,
+    }]);
+    let outcome = h.run(&m);
+    let slept = h.sleeper.total_slept();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    match outcome {
+        PlaybackOutcome::Failed { index, error } => {
+            assert_eq!(index, 0);
+            assert!(error.contains("[unterminated"), "{error}");
+        }
+        other => panic!("expected an immediate failure, got {other:?}"),
+    }
+    assert_eq!(slept, Duration::ZERO);
 }
 
 #[test]

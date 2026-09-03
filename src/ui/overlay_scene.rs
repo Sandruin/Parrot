@@ -10,6 +10,9 @@ const REGION: [u8; 4] = [250, 204, 21, 220];
 /// Longest text drawn next to an OCR region before it is cut off.
 const LABEL_CHARS: usize = 24;
 
+/// Cursor travel that is worth redrawing a cursor-anchored overlay for.
+const ANCHOR_EPSILON: i32 = 2;
+
 /// Shapes that visualize where an action acts on screen; empty for actions without a position.
 pub fn for_action(action: &Action) -> OverlayScene {
     for_action_from(action, cursor_pos())
@@ -93,16 +96,21 @@ fn clip(text: &str, max_chars: usize) -> String {
     format!("{kept}...")
 }
 
+/// Whether the anchor moved far enough that a cursor-anchored scene should be resent.
+pub fn cursor_moved(from: Point, to: Point) -> bool {
+    (from.x - to.x).abs() >= ANCHOR_EPSILON || (from.y - to.y).abs() >= ANCHOR_EPSILON
+}
+
 /// Where a relative move starts, which is wherever the cursor happens to be right now.
 #[cfg(windows)]
-fn cursor_pos() -> Point {
+pub fn cursor_pos() -> Point {
     use crate::platform::InputInjector as _;
 
     crate::platform::win32::injector::Win32Injector.cursor_pos().unwrap_or_default()
 }
 
 #[cfg(not(windows))]
-fn cursor_pos() -> Point {
+pub fn cursor_pos() -> Point {
     Point::default()
 }
 
@@ -223,6 +231,14 @@ mod tests {
         assert_eq!(*at, Point::new(10, 56));
         assert_eq!(text, "a very long caption tha...");
         assert_eq!(text.chars().count(), LABEL_CHARS + 2);
+    }
+
+    #[test]
+    fn only_movement_of_two_pixels_or_more_counts() {
+        let from = Point::new(100, 100);
+        assert!(!cursor_moved(from, Point::new(101, 99)));
+        assert!(cursor_moved(from, Point::new(102, 100)));
+        assert!(cursor_moved(from, Point::new(100, 98)));
     }
 
     #[test]

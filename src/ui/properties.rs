@@ -5,7 +5,7 @@ use egui::{Button, DragValue, Modal, RichText, Slider, TextEdit, Vec2};
 use super::{App, UiServices, action_list, keymap, style};
 use crate::model::{
     Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
-    TextMode, TimeUnit,
+    TextMatch, TextMode, TimeUnit,
 };
 
 /// Grace period that lets the user switch to the window they want to capture.
@@ -248,25 +248,15 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             });
             row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
         }
-        Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms, .. } => {
+        Action::WaitForText { region, text, case_sensitive, match_mode, poll_ms, timeout_ms } => {
             region_rows(ui, region, request_region);
-            row(ui, "Text", |ui| {
-                ui.add(TextEdit::singleline(text).desired_width(280.0));
-            });
-            row(ui, "Case", |ui| {
-                ui.checkbox(case_sensitive, "Case sensitive");
-            });
+            text_match_rows(ui, "wait_text_match", text, "Ready", case_sensitive, match_mode);
             millis(ui, "Poll every", poll_ms);
             millis(ui, "Timeout", timeout_ms);
         }
-        Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms, .. } => {
+        Action::ClickOnText { region, text, case_sensitive, match_mode, button, poll_ms, timeout_ms } => {
             region_rows(ui, region, request_region);
-            row(ui, "Text", |ui| {
-                ui.add(TextEdit::singleline(text).hint_text("Sign in").desired_width(280.0));
-            });
-            row(ui, "Case", |ui| {
-                ui.checkbox(case_sensitive, "Case sensitive");
-            });
+            text_match_rows(ui, "click_text_match", text, "Sign in", case_sensitive, match_mode);
             row(ui, "Button", |ui| {
                 combo(ui, "click_text_button", button, &MouseButton::ALL, |b| b.label().to_string());
             });
@@ -285,6 +275,9 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                 {
                     *path = picked.display().to_string();
                 }
+            });
+            row(ui, "", |ui| {
+                ui.weak("Wildcards * and ? match any file in the folder");
             });
             millis(ui, "Timeout", timeout_ms);
         }
@@ -354,6 +347,50 @@ fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: &mut bool) {
             *request = true;
         }
     });
+}
+
+/// Text, match mode and case rows shared by the two OCR editors, with live regex validation.
+fn text_match_rows(
+    ui: &mut egui::Ui,
+    id: &str,
+    text: &mut String,
+    hint: &str,
+    case_sensitive: &mut bool,
+    mode: &mut TextMatch,
+) {
+    row(ui, "Text", |ui| {
+        ui.add(TextEdit::singleline(text).hint_text(hint).desired_width(280.0));
+    });
+    match *mode {
+        TextMatch::Contains => row(ui, "", |ui| {
+            ui.weak("Substring of a recognized line");
+        }),
+        TextMatch::Regex => {
+            if let Some(message) = regex_error(text, *case_sensitive) {
+                row(ui, "", |ui| {
+                    ui.colored_label(ui.visuals().error_fg_color, message);
+                });
+            }
+        }
+    }
+    row(ui, "Match", |ui| {
+        combo(ui, id, mode, &TextMatch::ALL, |m| m.label().to_string());
+    });
+    row(ui, "Case", |ui| {
+        ui.checkbox(case_sensitive, "Case sensitive");
+    });
+}
+
+/// Why a pattern does not compile, reduced to the one line the regex crate summarizes it on.
+fn regex_error(pattern: &str, case_sensitive: bool) -> Option<String> {
+    let error = regex::RegexBuilder::new(pattern).case_insensitive(!case_sensitive).build().err()?;
+    let full = error.to_string();
+    let summary = full
+        .lines()
+        .rev()
+        .find_map(|line| line.trim().strip_prefix("error: "))
+        .unwrap_or_else(|| full.trim());
+    Some(format!("Invalid pattern: {summary}"))
 }
 
 /// Editor for relative steps: read-only totals, a scale factor and hand editing of a single step.
@@ -597,5 +634,31 @@ impl KeyKind {
             KeyKind::Up => Action::KeyUp { key },
             KeyKind::Press => Action::KeyPress { key },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_patterns_have_no_error() {
+        assert_eq!(regex_error("Ready|Done", false), None);
+        assert_eq!(regex_error("", true), None);
+    }
+
+    #[test]
+    fn broken_patterns_report_a_single_line() {
+        let message = regex_error("(", false).expect("an unclosed group should not compile");
+        assert_eq!(message, "Invalid pattern: unclosed group");
+        assert!(!message.contains('\n'));
+    }
+
+    #[test]
+    fn case_sensitivity_is_honoured() {
+        let insensitive = regex::RegexBuilder::new("ready").case_insensitive(true).build().unwrap();
+        assert!(insensitive.is_match("READY"));
+        let sensitive = regex::RegexBuilder::new("ready").case_insensitive(false).build().unwrap();
+        assert!(!sensitive.is_match("READY"));
     }
 }
