@@ -24,6 +24,7 @@ public static class Win32Shot {
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
@@ -47,9 +48,11 @@ public static class Win32Shot {
 "@
 [void][Win32Shot]::SetProcessDPIAware()
 
+# Visible frame of the window (DWMWA_EXTENDED_FRAME_BOUNDS), without the invisible resize border.
 function Get-WindowRect([IntPtr]$hwnd) {
     $r = New-Object Win32Shot+RECT
-    [void][Win32Shot]::GetWindowRect($hwnd, [ref]$r)
+    $hr = [Win32Shot]::DwmGetWindowAttribute($hwnd, 9, [ref]$r, 16)
+    if ($hr -ne 0) { [void][Win32Shot]::GetWindowRect($hwnd, [ref]$r) }
     return $r
 }
 
