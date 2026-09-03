@@ -58,10 +58,32 @@ fn file_menu(app: &mut App, ui: &mut egui::Ui) {
         if ui.button("Settings...").clicked() {
             app.settings_open = true;
         }
+        if ui
+            .add_enabled(!app.elevated, Button::new("Restart as administrator"))
+            .on_hover_text("Needed to send input to windows that run elevated")
+            .on_disabled_hover_text("Already running as administrator")
+            .clicked()
+        {
+            restart_elevated(app, ui.ctx());
+        }
         if ui.button("Exit").clicked() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
     });
+}
+
+/// Relaunches through the UAC prompt and closes this instance once the new one was started.
+#[cfg(windows)]
+fn restart_elevated(app: &mut App, ctx: &egui::Context) {
+    match crate::platform::win32::elevation::relaunch_elevated() {
+        Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Err(e) => app.error(format!("Could not restart as administrator: {e:#}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn restart_elevated(app: &mut App, _ctx: &egui::Context) {
+    app.error("Restarting elevated is a Windows feature");
 }
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {

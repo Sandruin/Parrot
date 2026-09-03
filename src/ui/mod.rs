@@ -4,6 +4,7 @@ pub mod files;
 pub mod keymap;
 pub mod overlay_scene;
 pub mod properties;
+pub mod region_picker;
 pub mod settings_window;
 pub mod status_bar;
 pub mod style;
@@ -17,6 +18,17 @@ use crate::engine::EngineHandle;
 use crate::model::{
     Action, ActionId, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro, PlaybackOutcome,
 };
+use crate::platform::{ScreenCapture, WindowManager};
+
+/// How often the foreground window's elevation is re-checked.
+const ELEVATION_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Platform services the GUI itself needs, cloned from the ones the engine runs on.
+#[derive(Clone)]
+pub struct UiServices {
+    pub capture: Arc<dyn ScreenCapture>,
+    pub windows: Arc<dyn WindowManager>,
+}
 
 /// What the app is currently doing; drives which buttons are enabled.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,6 +76,7 @@ pub struct App {
     pub mode: Mode,
     pub settings: AppSettings,
     pub engine: EngineHandle,
+    pub services: UiServices,
     pub status: Status,
     pub progress: Option<Progress>,
     /// Item the player is currently executing, highlighted in the list.
@@ -76,13 +89,25 @@ pub struct App {
     /// Item the list should scroll to on the next frame.
     pub scroll_to: Option<ActionId>,
     pub confirm: Option<files::Pending>,
+    /// Armed while the fullscreen region picker viewport is up.
+    pub region_picker: Option<region_picker::Picker>,
+    /// Whether we ourselves run elevated, checked once at startup.
+    pub elevated: bool,
+    /// Set while the foreground window is elevated and we are not.
+    pub elevation_warning: bool,
+    elevation_checked: Option<Instant>,
     overlay_sent: Option<Action>,
     title: String,
     wake_until: Option<Instant>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, engine: EngineHandle, settings: AppSettings) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        engine: EngineHandle,
+        settings: AppSettings,
+        services: UiServices,
+    ) -> Self {
         style::apply(&cc.egui_ctx);
         let demo = std::env::var_os("MACRO_DEMO_DOC").is_some();
         Self {
@@ -93,6 +118,7 @@ impl App {
             mode: Mode::Idle,
             settings,
             engine,
+            services,
             status: Status { text: "Ready".into(), error: false },
             progress: None,
             running: None,
@@ -102,6 +128,10 @@ impl App {
             editing_comment: None,
             scroll_to: None,
             confirm: None,
+            region_picker: None,
+            elevated: self_is_elevated(),
+            elevation_warning: false,
+            elevation_checked: None,
             overlay_sent: None,
             title: String::new(),
             wake_until: None,
@@ -322,10 +352,25 @@ impl App {
         }
     }
 
+    /// Re-checks once per second whether input would be swallowed by an elevated foreground window.
+    fn poll_elevation(&mut self) {
+        if self.elevation_checked.is_some_and(|at| at.elapsed() < ELEVATION_INTERVAL) {
+            return;
+        }
+        self.elevation_checked = Some(Instant::now());
+        self.elevation_warning = !self.elevated && foreground_is_elevated(&self.services);
+    }
+
+    /// Starts the region picker for the action the properties dialog is editing.
+    pub fn pick_region(&mut self, target: ActionId) {
+        region_picker::open(self, target);
+    }
+
     /// True while a modal or a text field owns the keyboard, so list shortcuts stay quiet.
     pub fn keyboard_busy(&self, ctx: &egui::Context) -> bool {
         self.dialog.is_some()
             || self.confirm.is_some()
+            || self.region_picker.is_some()
             || self.hotkey_capture.is_some()
             || self.editing_comment.is_some()
             || ctx.egui_wants_keyboard_input()
@@ -339,6 +384,7 @@ impl eframe::App for App {
         }
         self.sync_overlay();
         self.sync_title(ctx);
+        self.poll_elevation();
 
         let waking = self.wake_until.is_some_and(|t| Instant::now() < t);
         if self.mode.is_busy() || waking {
@@ -346,6 +392,10 @@ impl eframe::App for App {
         } else {
             self.wake_until = None;
         }
+        if self.region_picker.is_some() {
+            ctx.request_repaint();
+        }
+        ctx.request_repaint_after(ELEVATION_INTERVAL);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -358,7 +408,43 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| action_list::show(self, ui));
 
         properties::show(self, &ctx);
+        region_picker::show(self, &ctx);
         settings_window::show(self, &ctx);
         files::show_confirm(self, &ctx);
     }
+}
+
+#[cfg(windows)]
+fn self_is_elevated() -> bool {
+    crate::platform::win32::elevation::current_is_elevated()
+}
+
+#[cfg(not(windows))]
+fn self_is_elevated() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn foreground_is_elevated(services: &UiServices) -> bool {
+    services
+        .windows
+        .foreground()
+        .and_then(|window| crate::platform::win32::elevation::window_is_elevated(window.handle.0))
+        .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn foreground_is_elevated(_services: &UiServices) -> bool {
+    false
+}
+
+/// File name of our own executable, used to skip ourselves when reading the foreground window.
+pub fn own_process_name() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_default()
+    })
 }

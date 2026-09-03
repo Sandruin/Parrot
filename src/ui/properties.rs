@@ -1,10 +1,15 @@
+use std::time::{Duration, Instant};
+
 use egui::{Button, DragValue, Modal, RichText, Slider, TextEdit, Vec2};
 
-use super::{App, action_list, keymap, style};
+use super::{App, UiServices, action_list, keymap, style};
 use crate::model::{
     Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
     TextMode, TimeUnit,
 };
+
+/// Grace period that lets the user switch to the window they want to capture.
+const SWITCH_DELAY: Duration = Duration::from_secs(3);
 
 /// Modal editor for one action: edits a clone, commits on OK, discards on Cancel or Escape.
 pub struct Dialog {
@@ -14,6 +19,18 @@ pub struct Dialog {
     /// Set while the key picker waits for the next key press.
     capture_key: bool,
     preview: Option<Preview>,
+    /// Set by the "Capture region..." button, consumed once the modal has been laid out.
+    request_region: bool,
+    switch: Switch,
+}
+
+/// State of the "Use current foreground" countdown.
+#[derive(Default)]
+struct Switch {
+    /// End of the running countdown, `None` while the button is idle.
+    until: Option<Instant>,
+    /// Set when the countdown ran out while our own window was still in front.
+    missed: bool,
 }
 
 enum Preview {
@@ -29,7 +46,24 @@ impl Dialog {
             comment: item.comment.clone(),
             capture_key: false,
             preview: None,
+            request_region: false,
+            switch: Switch::default(),
         }
+    }
+
+    /// Stores a freshly picked region and template; returns false when the dialog moved on.
+    pub fn apply_region(&mut self, target: ActionId, picked: Rect, png: Vec<u8>) -> bool {
+        if self.id != target {
+            return false;
+        }
+        let Action::WaitForImage { region, template_png, mode, .. } = &mut self.action else {
+            return false;
+        };
+        *region = picked;
+        *template_png = png;
+        *mode = ImageMatchMode::Exact;
+        self.preview = None;
+        true
     }
 }
 
@@ -38,6 +72,8 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         return;
     };
     let captured = capture_pressed_key(&mut dialog, ctx);
+    let services = app.services.clone();
+    let picking = app.region_picker.is_some();
     let mut commit = false;
     let mut cancel = false;
 
@@ -54,16 +90,18 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
 
-        let Dialog { action, comment, capture_key, preview, .. } = &mut dialog;
         egui::Grid::new("action_fields").num_columns(2).spacing([14.0, 8.0]).min_col_width(104.0).show(
             ui,
             |ui| {
-                fields(ui, ctx, action, capture_key, preview);
+                fields(ui, ctx, &mut dialog, &services);
                 row(ui, "Comment", |ui| {
-                    ui.add(TextEdit::singleline(comment).desired_width(280.0));
+                    ui.add(TextEdit::singleline(&mut dialog.comment).desired_width(280.0));
                 });
             },
         );
+        if matches!(dialog.action, Action::WaitForImage { .. }) {
+            template_preview(ui, &dialog.preview);
+        }
 
         ui.add_space(12.0);
         ui.separator();
@@ -81,7 +119,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         });
     });
 
-    if !captured && response.should_close() {
+    if !captured && !picking && response.should_close() {
         cancel = true;
     }
     if commit {
@@ -92,18 +130,19 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
-    if !cancel {
-        app.dialog = Some(dialog);
+    if cancel {
+        return;
+    }
+    let target = dialog.id;
+    let start_picker = std::mem::take(&mut dialog.request_region);
+    app.dialog = Some(dialog);
+    if start_picker {
+        app.pick_region(target);
     }
 }
 
-fn fields(
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-    action: &mut Action,
-    capture_key: &mut bool,
-    preview: &mut Option<Preview>,
-) {
+fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services: &UiServices) {
+    let Dialog { action, capture_key, preview, request_region, switch, .. } = dialog;
     match action {
         Action::KeyDown { .. } | Action::KeyUp { .. } | Action::KeyPress { .. } => {
             key_fields(ui, action, capture_key);
@@ -184,12 +223,11 @@ fn fields(
             });
             millis(ui, "Timeout", timeout_ms);
             row(ui, "", |ui| {
-                ui.add_enabled(false, Button::new("Use current foreground"))
-                    .on_disabled_hover_text("Picking the foreground window comes in a later phase");
+                foreground_button(ui, ctx, title_contains, process_name, switch, services);
             });
         }
         Action::WaitForImage { region, template_png, similarity, poll_ms, timeout_ms, mode } => {
-            region_rows(ui, region);
+            region_rows(ui, region, Some(request_region));
             row(ui, "Similarity", |ui| {
                 ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
             });
@@ -202,10 +240,10 @@ fn fields(
                     ImageMatchMode::Search => "Search in region".into(),
                 });
             });
-            row(ui, "Template", |ui| template(ui, ctx, template_png, preview));
+            row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
         }
         Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms } => {
-            region_rows(ui, region);
+            region_rows(ui, region, None);
             row(ui, "Text", |ui| {
                 ui.add(TextEdit::singleline(text).desired_width(280.0));
             });
@@ -271,20 +309,79 @@ fn position(ui: &mut egui::Ui, pos: &mut Option<Point>) {
     *pos = if at_cursor { None } else { Some(point) };
 }
 
-fn region_rows(ui: &mut egui::Ui, region: &mut Rect) {
+fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: Option<&mut bool>) {
     row(ui, "Region", |ui| {
         ui.add(DragValue::new(&mut region.x).prefix("x "));
         ui.add(DragValue::new(&mut region.y).prefix("y "));
         ui.add(DragValue::new(&mut region.w).range(1..=32_768).prefix("w "));
         ui.add(DragValue::new(&mut region.h).range(1..=32_768).prefix("h "));
     });
-    row(ui, "", |ui| {
-        ui.add_enabled(false, Button::new("Capture region..."))
-            .on_disabled_hover_text("The region picker comes in a later phase");
+    row(ui, "", |ui| match request {
+        Some(request) => {
+            if ui
+                .add(Button::new("Capture region..."))
+                .on_hover_text("Freeze the screen and drag the region you want to wait for")
+                .clicked()
+            {
+                *request = true;
+            }
+        }
+        None => {
+            ui.add_enabled(false, Button::new("Capture region..."))
+                .on_disabled_hover_text("Text regions get their picker with the OCR phase");
+        }
     });
 }
 
-fn template(ui: &mut egui::Ui, ctx: &egui::Context, png: &[u8], preview: &mut Option<Preview>) {
+/// Reads the foreground window after a short countdown so the user can switch to it first.
+fn foreground_button(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    title_contains: &mut String,
+    process_name: &mut String,
+    switch: &mut Switch,
+    services: &UiServices,
+) {
+    let Some(deadline) = switch.until else {
+        if ui
+            .add(Button::new("Use current foreground"))
+            .on_hover_text("Counts down three seconds, then reads the window you switched to")
+            .clicked()
+        {
+            switch.until = Some(Instant::now() + SWITCH_DELAY);
+            switch.missed = false;
+            ctx.request_repaint();
+        }
+        if switch.missed {
+            ui.weak("The recorder was still in front");
+        }
+        return;
+    };
+
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        switch.until = None;
+        match services.windows.foreground().filter(|w| w.process_name != super::own_process_name()) {
+            Some(window) => {
+                *title_contains = window.title;
+                *process_name = window.process_name;
+            }
+            None => switch.missed = true,
+        }
+        return;
+    }
+
+    let seconds = left.as_secs() + 1;
+    let label =
+        RichText::new(format!("Switch to the target window... {seconds}")).color(style::accent(ui.visuals()));
+    if ui.add(Button::new(label).min_size(Vec2::new(240.0, 0.0))).on_hover_text("Click to cancel").clicked() {
+        switch.until = None;
+    }
+    ctx.request_repaint_after(Duration::from_millis(200));
+}
+
+/// Template row inside the field grid: only text, since a grid row does not grow for an image.
+fn template_row(ui: &mut egui::Ui, ctx: &egui::Context, png: &[u8], preview: &mut Option<Preview>) {
     if png.is_empty() {
         ui.weak("No template captured yet");
         return;
@@ -297,14 +394,33 @@ fn template(ui: &mut egui::Ui, ctx: &egui::Context, png: &[u8], preview: &mut Op
     }
     match preview {
         Some(Preview::Image(texture)) => {
-            let sized = egui::load::SizedTexture::from_handle(texture);
-            ui.add(egui::Image::new(sized).max_size(Vec2::new(180.0, 120.0)));
-            ui.weak(format!("{} x {} px", sized.size.x, sized.size.y));
+            let size = texture.size();
+            ui.weak(format!("{} x {} px", size[0], size[1]));
         }
         _ => {
             ui.colored_label(ui.visuals().error_fg_color, "Template image cannot be decoded");
         }
     }
+}
+
+/// Scaled template picture, drawn under the field grid where it has room to breathe.
+fn template_preview(ui: &mut egui::Ui, preview: &Option<Preview>) {
+    let Some(Preview::Image(texture)) = preview else {
+        return;
+    };
+    let sized = egui::load::SizedTexture::from_handle(texture);
+    let scale = (240.0 / sized.size.x).min(150.0 / sized.size.y).min(1.0);
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(118.0);
+        egui::Frame::new()
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(4)
+            .inner_margin(2)
+            .show(ui, |ui| {
+                ui.add(egui::Image::new(sized).fit_to_exact_size(sized.size * scale));
+            });
+    });
 }
 
 fn decode(ctx: &egui::Context, png: &[u8]) -> Option<egui::TextureHandle> {

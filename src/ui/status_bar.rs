@@ -17,6 +17,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         };
         ui.label(RichText::new(app.mode.label()).font(style::medium(12.5)).color(mode_color));
 
+        if app.elevation_warning {
+            ui.separator();
+            ui.label(
+                egui_material_icons::icons::ICON_WARNING
+                    .rich_text()
+                    .size(16.0)
+                    .color(style::record_red(ui.visuals())),
+            )
+            .on_hover_text("The active window runs elevated; input will not reach it");
+        }
+
         if let Some(progress) = app.progress {
             ui.separator();
             ui.label(format!("{} / {}", progress.index + 1, progress.total));
