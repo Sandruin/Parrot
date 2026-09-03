@@ -158,6 +158,27 @@ pub enum ImageMatchMode {
     Search,
 }
 
+/// How the text of a `WaitForText` or `ClickOnText` action is compared against what OCR read.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextMatch {
+    /// The text must appear as a substring of a recognized line.
+    #[default]
+    Contains,
+    /// The text is a regular expression searched in each recognized line.
+    Regex,
+}
+
+impl TextMatch {
+    pub const ALL: [TextMatch; 2] = [TextMatch::Contains, TextMatch::Regex];
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            TextMatch::Contains => "Contains",
+            TextMatch::Regex => "Regular expression",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
@@ -218,6 +239,8 @@ pub enum Action {
         region: Rect,
         text: String,
         case_sensitive: bool,
+        #[serde(default)]
+        match_mode: TextMatch,
         poll_ms: u32,
         timeout_ms: u32,
     },
@@ -226,6 +249,8 @@ pub enum Action {
         region: Rect,
         text: String,
         case_sensitive: bool,
+        #[serde(default)]
+        match_mode: TextMatch,
         button: MouseButton,
         poll_ms: u32,
         timeout_ms: u32,

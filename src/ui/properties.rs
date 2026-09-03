@@ -248,7 +248,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             });
             row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
         }
-        Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms } => {
+        Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms, .. } => {
             region_rows(ui, region, request_region);
             row(ui, "Text", |ui| {
                 ui.add(TextEdit::singleline(text).desired_width(280.0));
@@ -259,7 +259,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             millis(ui, "Poll every", poll_ms);
             millis(ui, "Timeout", timeout_ms);
         }
-        Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms } => {
+        Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms, .. } => {
             region_rows(ui, region, request_region);
             row(ui, "Text", |ui| {
                 ui.add(TextEdit::singleline(text).hint_text("Sign in").desired_width(280.0));

@@ -229,7 +229,7 @@ impl Player {
                 };
                 return self.wait_for_image(&spec, &template, sched);
             }
-            Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms } => {
+            Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms, .. } => {
                 let spec = TextWait {
                     region: *region,
                     text,
@@ -241,7 +241,7 @@ impl Player {
                     return Ok(Flow::Stopped);
                 }
             }
-            Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms } => {
+            Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms, .. } => {
                 let spec = TextWait {
                     region: *region,
                     text,

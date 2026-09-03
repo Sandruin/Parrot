@@ -208,6 +208,7 @@ mod tests {
             region: Rect::new(10, 20, 100, 30),
             text: "a very long caption that will not fit".into(),
             case_sensitive: false,
+            match_mode: crate::model::TextMatch::Contains,
             button: MouseButton::Left,
             poll_ms: 500,
             timeout_ms: 10_000,

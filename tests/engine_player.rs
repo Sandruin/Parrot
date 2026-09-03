@@ -406,6 +406,7 @@ fn wait_for_text_matches_and_quotes_the_read_text_on_timeout() {
         region,
         text: "export FINISHED".into(),
         case_sensitive: false,
+        match_mode: macro_recorder::model::TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 1_000,
     }]);
@@ -417,6 +418,7 @@ fn wait_for_text_matches_and_quotes_the_read_text_on_timeout() {
         region,
         text: "cancelled".into(),
         case_sensitive: false,
+        match_mode: macro_recorder::model::TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 200,
     }]);
@@ -440,6 +442,7 @@ fn a_long_read_is_truncated_in_the_timeout_error() {
         region: Rect::new(0, 0, 48, 16),
         text: "ready".into(),
         case_sensitive: false,
+        match_mode: macro_recorder::model::TextMatch::Contains,
         poll_ms: 50,
         timeout_ms: 50,
     }]);
@@ -464,6 +467,7 @@ fn click_on_text_clicks_the_centre_of_the_match_in_screen_pixels() {
         region,
         text: "save as".into(),
         case_sensitive: false,
+        match_mode: macro_recorder::model::TextMatch::Contains,
         button: MouseButton::Right,
         poll_ms: 50,
         timeout_ms: 1_000,

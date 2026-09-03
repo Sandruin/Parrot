@@ -8,7 +8,7 @@ mod settings;
 
 pub use action::{
     Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
-    TextMode, TimeUnit,
+    TextMatch, TextMode, TimeUnit,
 };
 pub use hotkey::{Hotkey, HotkeyAction, HotkeyConfig, modifiers};
 pub use key_names::{vk, vk_name};

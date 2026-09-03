@@ -211,6 +211,7 @@ fn image_items(app: &mut App, ui: &mut egui::Ui) {
             region: text_region(),
             text: String::new(),
             case_sensitive: false,
+            match_mode: crate::model::TextMatch::Contains,
             poll_ms: 500,
             timeout_ms: 10_000,
         });
@@ -220,6 +221,7 @@ fn image_items(app: &mut App, ui: &mut egui::Ui) {
             region: text_region(),
             text: String::new(),
             case_sensitive: false,
+            match_mode: crate::model::TextMatch::Contains,
             button: MouseButton::Left,
             poll_ms: 500,
             timeout_ms: 10_000,
