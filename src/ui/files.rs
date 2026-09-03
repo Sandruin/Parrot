@@ -11,6 +11,7 @@ pub enum Pending {
     New,
     Open,
     OpenPath(PathBuf),
+    Close,
 }
 
 pub fn new_doc(app: &mut App) {
@@ -83,6 +84,21 @@ pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
     }
 }
 
+/// Intercepts a close request while the macro has unsaved changes.
+pub fn confirm_close(app: &mut App, ctx: &egui::Context) {
+    if app.closing || !ctx.input(|i| i.viewport().close_requested()) {
+        return;
+    }
+    if !app.dirty {
+        app.closing = true;
+        return;
+    }
+    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+    if app.confirm.is_none() {
+        app.confirm = Some(Pending::Close);
+    }
+}
+
 /// Modal asking what to do with unsaved changes before a destructive action.
 pub fn show_confirm(app: &mut App, ctx: &egui::Context) {
     let Some(pending) = app.confirm.take() else {
@@ -92,17 +108,23 @@ pub fn show_confirm(app: &mut App, ctx: &egui::Context) {
     let mut cancel = false;
     let mut save_first = false;
 
+    let closing = matches!(pending, Pending::Close);
     let response = egui::Modal::new(egui::Id::new("confirm_discard")).show(ctx, |ui| {
         ui.set_min_width(340.0);
         ui.heading("Unsaved changes");
         ui.add_space(6.0);
-        ui.label("This macro has changes that are not saved yet.");
+        ui.label(if closing {
+            "This macro has changes that are not saved yet. Close anyway?"
+        } else {
+            "This macro has changes that are not saved yet."
+        });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if ui.add(Button::new("Save").min_size(Vec2::new(84.0, 0.0))).clicked() {
                 save_first = true;
             }
-            if ui.add(Button::new("Discard").min_size(Vec2::new(84.0, 0.0))).clicked() {
+            let discard = if closing { "Close" } else { "Discard" };
+            if ui.add(Button::new(discard).min_size(Vec2::new(84.0, 0.0))).clicked() {
                 proceed = true;
             }
             if ui.add(Button::new("Cancel").min_size(Vec2::new(84.0, 0.0))).clicked() {
@@ -126,6 +148,10 @@ pub fn show_confirm(app: &mut App, ctx: &egui::Context) {
             Pending::New => reset(app),
             Pending::Open => pick_and_open(app),
             Pending::OpenPath(path) => load(app, &path),
+            Pending::Close => {
+                app.closing = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
     } else if !cancel {
         app.confirm = Some(pending);

@@ -101,6 +101,8 @@ pub struct App {
     /// Item the list should scroll to on the next frame.
     pub scroll_to: Option<ActionId>,
     pub confirm: Option<files::Pending>,
+    /// Set once closing is allowed, so the confirmed close is not intercepted again.
+    pub closing: bool,
     /// Armed while the fullscreen region picker viewport is up.
     pub region_picker: Option<region_picker::Picker>,
     /// Whether we ourselves run elevated, checked once at startup.
@@ -146,6 +148,7 @@ impl App {
             editing_comment: None,
             scroll_to: None,
             confirm: None,
+            closing: false,
             region_picker: None,
             elevated: self_is_elevated(),
             elevation_warning: false,
@@ -572,6 +575,7 @@ impl eframe::App for App {
         self.follow_cursor(ctx);
         self.sync_title(ctx);
         self.poll_elevation();
+        files::confirm_close(self, ctx);
 
         let waking = self.wake_until.is_some_and(|t| Instant::now() < t);
         if self.mode.is_busy() || waking {
