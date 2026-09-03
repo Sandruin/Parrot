@@ -1,0 +1,242 @@
+use std::thread::JoinHandle;
+
+use anyhow::{Context, Result, bail};
+use crossbeam_channel::{Receiver, Sender};
+use windows::Win32::Foundation::{LPARAM, WPARAM};
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+};
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, EVENT_SYSTEM_FOREGROUND, GetMessageW, HHOOK, MSG, PostThreadMessageW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_HOTKEY,
+};
+
+use super::{hooks, hotkeys, winevent};
+use crate::model::{RawInputEvent, Win32Command};
+
+/// Posted to the service thread so the `GetMessageW` loop wakes up and drains the command channel.
+const WM_DRAIN: u32 = WM_APP + 1;
+
+/// Handle to the Win32 service thread that hosts the hooks, hotkeys and later the overlay window.
+pub struct Win32Handle {
+    cmd_tx: Sender<Win32Command>,
+    thread_id: u32,
+    thread: Option<JoinHandle<()>>,
+    relay: Option<JoinHandle<()>>,
+}
+
+impl Win32Handle {
+    /// Clone of the command sender for threads that must not own the handle; sends wake the loop too.
+    pub fn cmd_sender(&self) -> Sender<Win32Command> {
+        self.cmd_tx.clone()
+    }
+
+    pub fn send(&self, cmd: Win32Command) {
+        if self.cmd_tx.send(cmd).is_err() {
+            log::warn!("win32 service thread is gone");
+            return;
+        }
+        wake(self.thread_id);
+    }
+
+    /// Thread that owns the hooks, for callers that need to post their own messages to it.
+    pub fn thread_id(&self) -> u32 {
+        self.thread_id
+    }
+}
+
+impl Drop for Win32Handle {
+    fn drop(&mut self) {
+        self.send(Win32Command::Shutdown);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+        if let Some(t) = self.relay.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// Starts the service thread: low-level hooks, the foreground WinEvent hook, hotkeys and a message loop.
+pub fn spawn_win32_service(raw_tx: Sender<RawInputEvent>) -> Result<Win32Handle> {
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<Win32Command>();
+    let (loop_tx, loop_rx) = crossbeam_channel::unbounded::<Win32Command>();
+    let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<u32, String>>(1);
+
+    let thread = std::thread::Builder::new().name("win32".into()).spawn(move || {
+        match Service::install(raw_tx) {
+            Ok(mut service) => {
+                // SAFETY: plain Win32 call without arguments.
+                let _ = ready_tx.send(Ok(unsafe { GetCurrentThreadId() }));
+                service.run(&loop_rx);
+            }
+            Err(e) => {
+                let _ = ready_tx.send(Err(format!("{e:#}")));
+            }
+        }
+    })?;
+
+    let thread_id = match ready_rx.recv() {
+        Ok(Ok(id)) => id,
+        Ok(Err(e)) => {
+            let _ = thread.join();
+            bail!("win32 service thread failed to start: {e}");
+        }
+        Err(_) => {
+            let _ = thread.join();
+            bail!("win32 service thread died during startup");
+        }
+    };
+
+    let relay = std::thread::Builder::new().name("win32-wake".into()).spawn(move || {
+        while let Ok(cmd) = cmd_rx.recv() {
+            let last = matches!(cmd, Win32Command::Shutdown);
+            if loop_tx.send(cmd).is_err() {
+                break;
+            }
+            wake(thread_id);
+            if last {
+                break;
+            }
+        }
+    })?;
+
+    Ok(Win32Handle { cmd_tx, thread_id, thread: Some(thread), relay: Some(relay) })
+}
+
+fn wake(thread_id: u32) {
+    // SAFETY: posts a private message to a thread that owns a message queue for as long as it runs.
+    if let Err(e) = unsafe { PostThreadMessageW(thread_id, WM_DRAIN, WPARAM(0), LPARAM(0)) } {
+        log::debug!("PostThreadMessageW to the win32 thread failed: {e}");
+    }
+}
+
+/// Hooks and registrations owned by the service thread; unwound in `Drop`.
+struct Service {
+    keyboard: HHOOK,
+    mouse: HHOOK,
+    winevent: HWINEVENTHOOK,
+    hotkeys: hotkeys::HotkeyRegistry,
+}
+
+impl Service {
+    fn install(raw_tx: Sender<RawInputEvent>) -> Result<Self> {
+        // SAFETY: raises this thread's priority so the OS does not time out the hook callbacks.
+        unsafe {
+            if let Err(e) = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) {
+                log::warn!("SetThreadPriority failed: {e}");
+            }
+        }
+        hooks::init(raw_tx)?;
+
+        // SAFETY: global low-level hooks with `None` module and thread 0, procedures live for the process.
+        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hooks::keyboard_proc), None, 0) }
+            .context("SetWindowsHookExW(WH_KEYBOARD_LL)")?;
+        let mouse = match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(hooks::mouse_proc), None, 0) } {
+            Ok(hook) => hook,
+            Err(e) => {
+                // SAFETY: undoes the keyboard hook installed a moment ago.
+                unsafe { UnhookWindowsHookEx(keyboard) }.ok();
+                return Err(e).context("SetWindowsHookExW(WH_MOUSE_LL)");
+            }
+        };
+        // SAFETY: out-of-context WinEvent hook, the callback runs on this thread's message loop.
+        let winevent = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(winevent::win_event_proc),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+            )
+        };
+        if winevent.is_invalid() {
+            log::warn!("SetWinEventHook(EVENT_SYSTEM_FOREGROUND) failed, window changes are not tracked");
+        }
+        log::info!("win32 service thread ready");
+        Ok(Self { keyboard, mouse, winevent, hotkeys: hotkeys::HotkeyRegistry::default() })
+    }
+
+    fn run(&mut self, cmd_rx: &Receiver<Win32Command>) {
+        let mut msg = MSG::default();
+        loop {
+            if !self.drain(cmd_rx) {
+                break;
+            }
+            // SAFETY: `msg` is a live local; blocks until a message arrives for this thread.
+            let result = unsafe { GetMessageW(&mut msg, None, 0, 0) }.0;
+            if result == -1 {
+                log::error!("GetMessageW failed: {}", windows::core::Error::from_thread());
+                break;
+            }
+            if result == 0 {
+                break;
+            }
+            match msg.message {
+                WM_DRAIN => {}
+                WM_HOTKEY => {
+                    if let Some(action) = self.hotkeys.action_for_id(msg.wParam.0 as i32)
+                        && let Some(ctx) = hooks::ctx()
+                    {
+                        ctx.send(RawInputEvent::Hotkey(action));
+                    }
+                }
+                // SAFETY: forwards anything else, which matters once the overlay window lives here.
+                _ => unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                },
+            }
+        }
+    }
+
+    /// Handles every queued command; returns false when the service must shut down.
+    fn drain(&mut self, cmd_rx: &Receiver<Win32Command>) -> bool {
+        loop {
+            match cmd_rx.try_recv() {
+                Ok(Win32Command::Shutdown) => return false,
+                Ok(cmd) => self.handle(cmd),
+                Err(crossbeam_channel::TryRecvError::Empty) => return true,
+                Err(crossbeam_channel::TryRecvError::Disconnected) => return false,
+            }
+        }
+    }
+
+    fn handle(&mut self, cmd: Win32Command) {
+        let Some(ctx) = hooks::ctx() else { return };
+        match cmd {
+            Win32Command::EnableHooks(enabled) => ctx.set_forward_moves(enabled),
+            Win32Command::SetHotkeys(config) => {
+                let fallback = self.hotkeys.set(&config);
+                ctx.set_hotkeys(hotkeys::chord_vks(&config), fallback);
+            }
+            Win32Command::PlaybackStarted(control) => ctx.arm_playback(control),
+            Win32Command::PlaybackStopped => ctx.disarm_playback(),
+            // The overlay window will be created and updated right here in a later phase.
+            Win32Command::OverlayShow(scene) => {
+                log::debug!("overlay show with {} shapes (not implemented yet)", scene.shapes.len());
+            }
+            Win32Command::OverlayHide => log::debug!("overlay hide (not implemented yet)"),
+            Win32Command::Shutdown => {}
+        }
+    }
+}
+
+impl Drop for Service {
+    fn drop(&mut self) {
+        self.hotkeys.unregister_all();
+        // SAFETY: releases the hooks this thread installed; each handle is used once.
+        unsafe {
+            if !self.winevent.is_invalid() {
+                let _ = UnhookWinEvent(self.winevent);
+            }
+            UnhookWindowsHookEx(self.mouse).ok();
+            UnhookWindowsHookEx(self.keyboard).ok();
+        }
+        log::info!("win32 service thread stopped");
+    }
+}
