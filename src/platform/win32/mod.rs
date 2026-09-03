@@ -5,6 +5,7 @@ pub mod hooks;
 pub mod hotkeys;
 pub mod injector;
 pub mod keys;
+pub mod ocr;
 pub mod overlay;
 pub mod service_thread;
 pub mod window;

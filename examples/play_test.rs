@@ -6,7 +6,7 @@ use macro_recorder::engine::{EngineDeps, spawn_engine};
 use macro_recorder::model::{Action, EngineCommand, EngineEvent, Macro, PlayerControl};
 use macro_recorder::platform::sleeper::RealSleeper;
 use macro_recorder::platform::win32::{
-    capture::Win32Capture, injector::Win32Injector, keys, window::Win32Windows,
+    capture::Win32Capture, injector::Win32Injector, keys, ocr::Win32Ocr, window::Win32Windows,
 };
 
 /// Plays "hi " into the focused window after 3 seconds, directly or through the engine thread.
@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<()> {
         capture: Arc::new(Win32Capture),
         windows: Arc::new(Win32Windows),
         sleeper: Arc::new(RealSleeper::default()),
+        ocr: Arc::new(Win32Ocr),
     };
     if through_engine {
         let engine = spawn_engine(EngineDeps {
@@ -42,6 +43,7 @@ fn main() -> anyhow::Result<()> {
             capture: deps.capture.clone(),
             windows: deps.windows.clone(),
             sleeper: deps.sleeper.clone(),
+            ocr: deps.ocr.clone(),
         })?;
         engine.send(EngineCommand::Play { macro_: Arc::new(doc), start_index: 0 });
         loop {

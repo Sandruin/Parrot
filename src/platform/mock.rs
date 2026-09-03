@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use image::RgbaImage;
 
-use super::{InputInjector, ScreenCapture, Sleeper, WaitResult, WindowInfo, WindowManager, WindowRef};
+use super::{
+    InputInjector, Ocr, OcrLine, ScreenCapture, Sleeper, WaitResult, WindowInfo, WindowManager, WindowRef,
+};
 use crate::model::{Key, MouseButton, PlayerControl, Point, Rect};
 
 /// One recorded call on `MockInjector`.
@@ -13,6 +15,7 @@ pub enum InjectedCall {
     Key { key: Key, down: bool },
     Unicode { utf16: u16, down: bool },
     MoveAbs(Point),
+    MoveRel { dx: i32, dy: i32 },
     Button { button: MouseButton, down: bool },
     Wheel { delta: i32, horizontal: bool },
 }
@@ -49,6 +52,15 @@ impl InputInjector for MockInjector {
         self.push(InjectedCall::MoveAbs(pos))
     }
 
+    fn mouse_move_rel(&self, dx: i32, dy: i32) -> Result<()> {
+        {
+            let mut cursor = self.cursor.lock().unwrap();
+            cursor.x += dx;
+            cursor.y += dy;
+        }
+        self.push(InjectedCall::MoveRel { dx, dy })
+    }
+
     fn mouse_button(&self, button: MouseButton, down: bool) -> Result<()> {
         self.push(InjectedCall::Button { button, down })
     }
@@ -59,6 +71,20 @@ impl InputInjector for MockInjector {
 
     fn cursor_pos(&self) -> Result<Point> {
         Ok(*self.cursor.lock().unwrap())
+    }
+}
+
+/// Returns a fixed set of lines for every image and counts the calls.
+#[derive(Default)]
+pub struct MockOcr {
+    pub lines: Mutex<Vec<OcrLine>>,
+    pub calls: Mutex<usize>,
+}
+
+impl Ocr for MockOcr {
+    fn recognize(&self, _image: &RgbaImage) -> Result<Vec<OcrLine>> {
+        *self.calls.lock().unwrap() += 1;
+        Ok(self.lines.lock().unwrap().clone())
     }
 }
 

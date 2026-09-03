@@ -9,7 +9,7 @@ use macro_recorder::model::{
     Action, ActionItem, EngineCommand, EngineEvent, Hotkey, HotkeyAction, HotkeyConfig, Key, Macro,
     MacroSettings, PlaybackOutcome, Point, RawInputEvent, RecordOptions, Repeat, TimeUnit, Win32Command,
 };
-use macro_recorder::platform::mock::{MockCapture, MockInjector, MockWindowManager};
+use macro_recorder::platform::mock::{MockCapture, MockInjector, MockOcr, MockWindowManager};
 use macro_recorder::platform::sleeper::RealSleeper;
 
 struct Rig {
@@ -37,6 +37,7 @@ impl Rig {
             capture: Arc::new(MockCapture::new(RgbaImage::new(16, 16))),
             windows: Arc::new(MockWindowManager::default()),
             sleeper: Arc::new(RealSleeper::default()),
+            ocr: Arc::new(MockOcr::default()),
         })
         .unwrap();
         Self { engine, raw_tx, win32_rx, repaints, injector }

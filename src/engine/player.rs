@@ -11,7 +11,7 @@ use crate::model::{
     Action, ButtonEvent, ImageMatchMode, Key, Macro, MacroSettings, MouseButton, MousePathMode,
     PlaybackOutcome, PlayerControl, Rect, Repeat, TextMode, vk,
 };
-use crate::platform::{CharKey, InputInjector, ScreenCapture, Sleeper, WaitResult, WindowManager};
+use crate::platform::{CharKey, InputInjector, Ocr, ScreenCapture, Sleeper, WaitResult, WindowManager};
 
 /// Reports the item index and the 1-based repeat iteration currently running.
 pub type ProgressFn = Box<dyn FnMut(usize, u32) + Send>;
@@ -25,6 +25,7 @@ pub struct PlayerDeps {
     pub capture: Arc<dyn ScreenCapture>,
     pub windows: Arc<dyn WindowManager>,
     pub sleeper: Arc<dyn Sleeper>,
+    pub ocr: Arc<dyn Ocr>,
 }
 
 /// Executes one macro against the platform traits, releasing everything it pressed when it ends.
@@ -217,6 +218,8 @@ impl Player {
                 return self.wait_for_image(&spec, &template, sched);
             }
             Action::WaitForText { .. } => bail!("wait for text is not supported yet"),
+            Action::ClickOnText { .. } => bail!("click on text is not supported yet"),
+            Action::MouseMoveRelative { .. } => bail!("relative mouse moves are not supported yet"),
             Action::WaitForFile { .. } => bail!("wait for file is not supported yet"),
             Action::Comment { .. } | Action::Label { .. } => {}
         }

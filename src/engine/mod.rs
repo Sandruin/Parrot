@@ -13,7 +13,7 @@ use crate::model::{
     ActionId, ActionItem, EngineCommand, EngineEvent, HotkeyAction, HotkeyConfig, PlaybackOutcome,
     PlayerControl, RawInputEvent, Win32Command,
 };
-use crate::platform::{InputInjector, ScreenCapture, Sleeper, WindowManager};
+use crate::platform::{InputInjector, Ocr, ScreenCapture, Sleeper, WindowManager};
 use player::{Player, PlayerDeps};
 use recorder::Recorder;
 
@@ -61,6 +61,7 @@ pub struct EngineDeps {
     pub capture: Arc<dyn ScreenCapture>,
     pub windows: Arc<dyn WindowManager>,
     pub sleeper: Arc<dyn Sleeper>,
+    pub ocr: Arc<dyn Ocr>,
 }
 
 /// Spawns the engine thread: one recorder, one playback at a time.
@@ -68,13 +69,13 @@ pub fn spawn_engine(deps: EngineDeps) -> Result<EngineHandle> {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<EngineCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
     let thread = std::thread::Builder::new().name("engine".into()).spawn(move || {
-        let EngineDeps { raw_rx, win32_tx, repaint, injector, capture, windows, sleeper } = deps;
+        let EngineDeps { raw_rx, win32_tx, repaint, injector, capture, windows, sleeper, ocr } = deps;
         let (done_tx, done_rx) = crossbeam_channel::unbounded::<PlaybackOutcome>();
         let mut engine = Engine {
             evt_tx,
             win32_tx,
             repaint: Arc::from(repaint),
-            player_deps: PlayerDeps { injector, capture, windows, sleeper },
+            player_deps: PlayerDeps { injector, capture, windows, sleeper, ocr },
             state: State::Idle,
             chord_vks: HotkeyConfig::default().chord_vks(),
             next_id: 1,

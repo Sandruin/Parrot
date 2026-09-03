@@ -81,6 +81,10 @@ impl InputInjector for Win32Injector {
         send(&[mouse_input(0, 0, data, flags)])
     }
 
+    fn mouse_move_rel(&self, dx: i32, dy: i32) -> Result<()> {
+        send(&[mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE)])
+    }
+
     fn mouse_wheel(&self, delta: i32, horizontal: bool) -> Result<()> {
         let flags = if horizontal { MOUSEEVENTF_HWHEEL } else { MOUSEEVENTF_WHEEL };
         send(&[mouse_input(0, 0, delta as u32, flags)])

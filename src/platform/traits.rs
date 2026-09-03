@@ -32,6 +32,8 @@ pub trait InputInjector: Send + Sync {
     /// Sends one UTF-16 code unit as a Unicode key event.
     fn unicode(&self, utf16: u16, down: bool) -> Result<()>;
     fn mouse_move_abs(&self, pos: Point) -> Result<()>;
+    /// Moves the cursor by a raw delta, which is what games reading raw input expect.
+    fn mouse_move_rel(&self, dx: i32, dy: i32) -> Result<()>;
     fn mouse_button(&self, button: MouseButton, down: bool) -> Result<()>;
     /// `delta` in multiples of 120, positive is up or right.
     fn mouse_wheel(&self, delta: i32, horizontal: bool) -> Result<()>;
@@ -53,6 +55,24 @@ pub trait WindowManager: Send + Sync {
     fn find(&self, title_contains: &str, process_name: &str) -> Option<WindowRef>;
     fn activate(&self, window: WindowRef, timeout: Duration) -> Result<()>;
     fn foreground(&self) -> Option<WindowInfo>;
+}
+
+/// One recognized word with its bounding box in pixels of the analysed image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrWord {
+    pub text: String,
+    pub rect: Rect,
+}
+
+/// One recognized line; `text` is the words joined by single spaces.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OcrLine {
+    pub text: String,
+    pub words: Vec<OcrWord>,
+}
+
+pub trait Ocr: Send + Sync {
+    fn recognize(&self, image: &RgbaImage) -> Result<Vec<OcrLine>>;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

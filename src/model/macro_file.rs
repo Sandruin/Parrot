@@ -220,6 +220,18 @@ mod tests {
                 poll_ms: 500,
                 timeout_ms: 0,
             },
+            Action::ClickOnText {
+                region: Rect::new(0, 0, 800, 600),
+                text: "Start".into(),
+                case_sensitive: false,
+                button: MouseButton::Left,
+                poll_ms: 250,
+                timeout_ms: 5000,
+            },
+            Action::MouseMoveRelative {
+                steps: vec![PathPoint { x: 10, y: -5, dt_ms: 0 }, PathPoint { x: 4, y: 0, dt_ms: 8 }],
+                scale: 1.5,
+            },
             Action::WaitForFile { path: "C:/out/*.png".into(), timeout_ms: 60_000 },
             Action::Comment { text: "note".into() },
             Action::Label { name: "start".into() },

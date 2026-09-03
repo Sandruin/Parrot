@@ -45,6 +45,8 @@ impl RawInputEvent {
 #[serde(default)]
 pub struct RecordOptions {
     pub record_mouse_moves: bool,
+    /// Record cursor movement as relative steps for raw-input games instead of absolute paths.
+    pub relative_mouse_moves: bool,
     pub record_window_changes: bool,
     /// Fold a quick stationary down/up pair into a single click action.
     pub fold_clicks: bool,
@@ -58,6 +60,7 @@ impl Default for RecordOptions {
     fn default() -> Self {
         Self {
             record_mouse_moves: true,
+            relative_mouse_moves: false,
             record_window_changes: true,
             fold_clicks: true,
             fold_key_presses: true,

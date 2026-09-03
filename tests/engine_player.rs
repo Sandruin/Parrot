@@ -10,7 +10,7 @@ use macro_recorder::model::{
     PathPoint, PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMode, TimeUnit,
 };
 use macro_recorder::platform::mock::{
-    InjectedCall, MockCapture, MockInjector, MockSleeper, MockWindowManager,
+    InjectedCall, MockCapture, MockInjector, MockOcr, MockSleeper, MockWindowManager,
 };
 use macro_recorder::platform::sleeper::RealSleeper;
 use macro_recorder::platform::{CharKey, InputInjector, Sleeper, WindowInfo, WindowRef};
@@ -42,6 +42,7 @@ impl Harness {
             capture: self.capture.clone(),
             windows: self.windows.clone(),
             sleeper: self.sleeper.clone(),
+            ocr: Arc::new(MockOcr::default()),
         }
     }
 
@@ -415,6 +416,10 @@ impl InputInjector for LayoutInjector {
         self.inner.mouse_move_abs(pos)
     }
 
+    fn mouse_move_rel(&self, dx: i32, dy: i32) -> Result<()> {
+        self.inner.mouse_move_rel(dx, dy)
+    }
+
     fn mouse_button(&self, button: MouseButton, down: bool) -> Result<()> {
         self.inner.mouse_button(button, down)
     }
@@ -446,6 +451,7 @@ fn scan_code_typing_holds_modifiers_and_falls_back_to_unicode() {
         capture: Arc::new(MockCapture::new(RgbaImage::new(8, 8))),
         windows: Arc::new(MockWindowManager::default()),
         sleeper,
+        ocr: Arc::new(MockOcr::default()),
     };
     let m =
         macro_of(vec![Action::TypeText { text: "aA?".into(), mode: TextMode::ScanCodes, char_delay_ms: 0 }]);

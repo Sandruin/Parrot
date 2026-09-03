@@ -41,6 +41,7 @@ fn main() -> Result<()> {
             capture,
             windows,
             sleeper: Arc::new(platform::sleeper::RealSleeper::default()),
+            ocr: Arc::new(platform::win32::ocr::Win32Ocr),
         })?
     };
 

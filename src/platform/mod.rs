@@ -5,5 +5,6 @@ mod traits;
 pub mod win32;
 
 pub use traits::{
-    CharKey, InputInjector, ScreenCapture, Sleeper, WaitResult, WindowInfo, WindowManager, WindowRef,
+    CharKey, InputInjector, Ocr, OcrLine, OcrWord, ScreenCapture, Sleeper, WaitResult, WindowInfo,
+    WindowManager, WindowRef,
 };

@@ -183,6 +183,11 @@ pub enum Action {
     MouseMove {
         path: Vec<PathPoint>,
     },
+    /// Cursor displacements for games reading raw input; each step's x and y are deltas, `scale` multiplies them.
+    MouseMoveRelative {
+        steps: Vec<PathPoint>,
+        scale: f32,
+    },
     /// Button event at `pos`, or at the current cursor position when `pos` is `None`.
     MouseButton {
         button: MouseButton,
@@ -216,6 +221,15 @@ pub enum Action {
         poll_ms: u32,
         timeout_ms: u32,
     },
+    /// Waits until `text` is read inside `region`, then clicks the centre of the match.
+    ClickOnText {
+        region: Rect,
+        text: String,
+        case_sensitive: bool,
+        button: MouseButton,
+        poll_ms: u32,
+        timeout_ms: u32,
+    },
     WaitForFile {
         path: String,
         timeout_ms: u32,
@@ -238,6 +252,7 @@ impl Action {
             Action::KeyPress { .. } => "Key press".into(),
             Action::TypeText { .. } => "Type text".into(),
             Action::MouseMove { .. } => "Mouse move".into(),
+            Action::MouseMoveRelative { .. } => "Mouse move (relative)".into(),
             Action::MouseButton { button, event, .. } => {
                 format!("Mouse {} {}", button.label(), event.label())
             }
@@ -251,6 +266,7 @@ impl Action {
             Action::WindowActivate { .. } => "Window activate".into(),
             Action::WaitForImage { .. } => "Wait for image".into(),
             Action::WaitForText { .. } => "Wait for text".into(),
+            Action::ClickOnText { button, .. } => format!("Click on text ({})", button.label()),
             Action::WaitForFile { .. } => "Wait for file".into(),
             Action::Comment { .. } => "Comment".into(),
             Action::Label { .. } => "Label".into(),
@@ -270,6 +286,15 @@ impl Action {
                 (Some(a), _) => format!("{}, {}", a.x, a.y),
                 _ => String::new(),
             },
+            Action::MouseMoveRelative { steps, scale } => {
+                let (dx, dy) = steps.iter().fold((0i64, 0i64), |(x, y), s| (x + s.x as i64, y + s.y as i64));
+                let scaled = if (*scale - 1.0).abs() > f32::EPSILON {
+                    format!(", x{}", trim_float(*scale as f64))
+                } else {
+                    String::new()
+                };
+                format!("{dx:+}, {dy:+} ({} steps{scaled})", steps.len())
+            }
             Action::MouseButton { pos, .. } => match pos {
                 Some(p) => format!("{}, {}", p.x, p.y),
                 None => "at cursor".into(),
@@ -290,7 +315,7 @@ impl Action {
                 region.h,
                 (similarity * 100.0).round()
             ),
-            Action::WaitForText { text, .. } => truncate(text, 40),
+            Action::WaitForText { text, .. } | Action::ClickOnText { text, .. } => truncate(text, 40),
             Action::WaitForFile { path, .. } => path.clone(),
             Action::Comment { text } => truncate(text, 60),
             Action::Label { name } => name.clone(),
@@ -310,10 +335,12 @@ impl Action {
         matches!(
             self,
             Action::MouseMove { .. }
+                | Action::MouseMoveRelative { .. }
                 | Action::MouseButton { pos: Some(_), .. }
                 | Action::MouseWheel { pos: Some(_), .. }
                 | Action::WaitForImage { .. }
                 | Action::WaitForText { .. }
+                | Action::ClickOnText { .. }
         )
     }
 }

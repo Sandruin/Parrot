@@ -253,6 +253,11 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             millis(ui, "Poll every", poll_ms);
             millis(ui, "Timeout", timeout_ms);
         }
+        Action::MouseMoveRelative { .. } | Action::ClickOnText { .. } => {
+            row(ui, "", |ui| {
+                ui.weak("Editor not available yet");
+            });
+        }
         Action::WaitForFile { path, timeout_ms } => {
             row(ui, "Path", |ui| {
                 ui.add(TextEdit::singleline(path).desired_width(280.0));
