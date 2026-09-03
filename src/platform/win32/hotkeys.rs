@@ -18,9 +18,11 @@ pub struct HotkeyRegistry {
 
 impl HotkeyRegistry {
     /// Replaces the registrations with `config`; returns the chords that must be matched in the hook.
-    pub fn set(&mut self, config: &HotkeyConfig) -> Vec<(Hotkey, HotkeyAction)> {
+    /// The Stop chord is only registered while `busy`, so a plain Escape keeps working when idle.
+    pub fn set(&mut self, config: &HotkeyConfig, busy: bool) -> Vec<(Hotkey, HotkeyAction)> {
         self.unregister_all();
-        for (index, (action, hotkey)) in config.bindings().enumerate() {
+        let active = config.bindings().filter(|(action, _)| busy || *action != HotkeyAction::Stop);
+        for (index, (action, hotkey)) in active.enumerate() {
             let id = ID_BASE + index as i32;
             let flags = win32_modifiers(hotkey.modifiers) | MOD_NOREPEAT;
             // SAFETY: registers against the calling thread's message queue, no pointers involved.

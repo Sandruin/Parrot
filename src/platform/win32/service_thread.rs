@@ -13,13 +13,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP, WM_HOTKEY,
 };
 
-use super::{hooks, hotkeys, winevent};
-use crate::model::{RawInputEvent, Win32Command};
+use super::{hooks, hotkeys, overlay, winevent};
+use crate::model::{OverlayScene, RawInputEvent, Win32Command};
 
 /// Posted to the service thread so the `GetMessageW` loop wakes up and drains the command channel.
 const WM_DRAIN: u32 = WM_APP + 1;
 
-/// Handle to the Win32 service thread that hosts the hooks, hotkeys and later the overlay window.
+/// Handle to the Win32 service thread that hosts the hooks, hotkeys and the overlay window.
 pub struct Win32Handle {
     cmd_tx: Sender<Win32Command>,
     thread_id: u32,
@@ -119,6 +119,68 @@ struct Service {
     mouse: HHOOK,
     winevent: HWINEVENTHOOK,
     hotkeys: hotkeys::HotkeyRegistry,
+    /// Last configuration received, re-applied whenever the busy state flips.
+    hotkey_config: crate::model::HotkeyConfig,
+    overlay: OverlayState,
+}
+
+/// Overlay lifecycle: the window is created on demand and stays hidden while recording or playing.
+#[derive(Default)]
+struct OverlayState {
+    window: Option<overlay::Overlay>,
+    /// Last scene the GUI asked for, cleared only by `OverlayHide`.
+    scene: Option<OverlayScene>,
+    playing: bool,
+    recording: bool,
+}
+
+impl OverlayState {
+    fn show(&mut self, scene: OverlayScene) {
+        self.scene = Some(scene);
+        self.refresh();
+    }
+
+    fn hide(&mut self) {
+        self.scene = None;
+        if let Some(window) = self.window.as_mut() {
+            window.hide();
+        }
+    }
+
+    fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
+        self.refresh();
+    }
+
+    fn set_recording(&mut self, recording: bool) {
+        self.recording = recording;
+        self.refresh();
+    }
+
+    /// Draws the remembered scene, or hides the window while recording or playback suppresses it.
+    fn refresh(&mut self) {
+        if self.playing || self.recording || self.scene.is_none() {
+            if let Some(window) = self.window.as_mut() {
+                window.hide();
+            }
+            return;
+        }
+        if self.window.is_none() {
+            match overlay::Overlay::new() {
+                Ok(window) => self.window = Some(window),
+                Err(e) => {
+                    log::error!("the overlay window could not be created: {e:#}");
+                    return;
+                }
+            }
+        }
+        let (Some(window), Some(scene)) = (self.window.as_mut(), self.scene.as_ref()) else {
+            return;
+        };
+        if let Err(e) = window.show(scene) {
+            log::error!("drawing the overlay failed: {e:#}");
+        }
+    }
 }
 
 impl Service {
@@ -158,7 +220,14 @@ impl Service {
             log::warn!("SetWinEventHook(EVENT_SYSTEM_FOREGROUND) failed, window changes are not tracked");
         }
         log::info!("win32 service thread ready");
-        Ok(Self { keyboard, mouse, winevent, hotkeys: hotkeys::HotkeyRegistry::default() })
+        Ok(Self {
+            keyboard,
+            mouse,
+            winevent,
+            hotkeys: hotkeys::HotkeyRegistry::default(),
+            hotkey_config: crate::model::HotkeyConfig::default(),
+            overlay: OverlayState::default(),
+        })
     }
 
     fn run(&mut self, cmd_rx: &Receiver<Win32Command>) {
@@ -185,7 +254,7 @@ impl Service {
                         ctx.send(RawInputEvent::Hotkey(action));
                     }
                 }
-                // SAFETY: forwards anything else, which matters once the overlay window lives here.
+                // SAFETY: forwards anything else, which is how the overlay window gets its messages.
                 _ => unsafe {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
@@ -209,25 +278,42 @@ impl Service {
     fn handle(&mut self, cmd: Win32Command) {
         let Some(ctx) = hooks::ctx() else { return };
         match cmd {
-            Win32Command::EnableHooks(enabled) => ctx.set_forward_moves(enabled),
+            Win32Command::EnableHooks(enabled) => {
+                ctx.set_forward_moves(enabled);
+                self.overlay.set_recording(enabled);
+                self.apply_hotkeys(ctx);
+            }
             Win32Command::SetHotkeys(config) => {
-                let fallback = self.hotkeys.set(&config);
-                ctx.set_hotkeys(hotkeys::chord_vks(&config), fallback);
+                self.hotkey_config = config;
+                self.apply_hotkeys(ctx);
             }
-            Win32Command::PlaybackStarted(control) => ctx.arm_playback(control),
-            Win32Command::PlaybackStopped => ctx.disarm_playback(),
-            // The overlay window will be created and updated right here in a later phase.
-            Win32Command::OverlayShow(scene) => {
-                log::debug!("overlay show with {} shapes (not implemented yet)", scene.shapes.len());
+            Win32Command::PlaybackStarted(control) => {
+                ctx.arm_playback(control);
+                self.overlay.set_playing(true);
+                self.apply_hotkeys(ctx);
             }
-            Win32Command::OverlayHide => log::debug!("overlay hide (not implemented yet)"),
+            Win32Command::PlaybackStopped => {
+                ctx.disarm_playback();
+                self.overlay.set_playing(false);
+                self.apply_hotkeys(ctx);
+            }
+            Win32Command::OverlayShow(scene) => self.overlay.show(scene),
+            Win32Command::OverlayHide => self.overlay.hide(),
             Win32Command::Shutdown => {}
         }
+    }
+
+    /// Re-registers the chords for the current busy state and hands refused ones to the hook.
+    fn apply_hotkeys(&mut self, ctx: &hooks::HookCtx) {
+        let busy = self.overlay.playing || self.overlay.recording;
+        let fallback = self.hotkeys.set(&self.hotkey_config, busy);
+        ctx.set_hotkeys(hotkeys::chord_vks(&self.hotkey_config), fallback);
     }
 }
 
 impl Drop for Service {
     fn drop(&mut self) {
+        self.overlay.window = None;
         self.hotkeys.unregister_all();
         // SAFETY: releases the hooks this thread installed; each handle is used once.
         unsafe {
