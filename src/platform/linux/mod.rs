@@ -40,6 +40,6 @@ pub fn services() -> Result<PlatformServices> {
         injector: Arc::new(injector::WaylandInjector::new()?),
         capture: Arc::new(capture::WaylandCapture::new()?),
         windows: Arc::new(window::HyprlandWindows::new()),
-        ocr: Arc::new(ocr::TesseractOcr),
+        ocr: Arc::new(ocr::TesseractOcr::default()),
     })
 }

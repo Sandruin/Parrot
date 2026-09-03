@@ -1,28 +1,50 @@
-# Porting to Linux (Wayland)
+# The Linux backend
 
-Everything the engine and GUI need from the operating system goes through the traits in `src/platform/traits.rs`. A Linux backend is a new module `src/platform/linux` implementing them, plus a service thread that feeds `RawInputEvent`s and handles `Win32Command`s (rename the enum when the second platform lands).
+Everything the engine and GUI need from the operating system goes through the traits in `src/platform/traits.rs`.
+`src/platform/linux` implements them for Wayland compositors, with Hyprland specifics kept behind its IPC client.
+`src/platform/mod.rs` re-exports the active backend as `platform::native`, which is all `main.rs` and the examples use.
 
-## Traits to implement
+## Pieces
 
-| Trait | Windows implementation | Wayland notes |
+| Trait or job | Module | How |
 |---|---|---|
-| `InputInjector` | `win32/injector.rs` on SendInput | libei through the RemoteDesktop portal (GNOME 46+, Plasma 6.1+), or uinput as a fallback that needs the input group |
-| `ScreenCapture` | `win32/capture.rs` on GDI | xdg-desktop-portal Screenshot, or wlr-screencopy on wlroots compositors |
-| `WindowManager` | `win32/window.rs` | no generic protocol; per compositor: hyprctl, swaymsg, KWin scripting, a GNOME shell extension |
-| `Ocr` | `win32/ocr.rs` on Windows.Media.Ocr | tesseract-rs or ocrs |
-| `Sleeper` | `platform/sleeper.rs`, portable | reuse as is |
+| `InputInjector` | `injector.rs`, `keymap.rs` | wlr-virtual-pointer (one pointer per output for absolute moves) and virtual-keyboard: a keyboard carrying the seat's xkb keymap for scan-code keys, a second one with a generated keymap for Unicode text |
+| `ScreenCapture` | `capture.rs` | wlr-screencopy per output, stitched and cropped to the requested physical rectangle |
+| `WindowManager` | `window.rs` | Hyprland IPC: `j/clients`, `j/activewindow`, `focuswindow` |
+| `Ocr` | `ocr.rs` | system tesseract through the `tesseract` crate, word boxes from its TSV output |
+| Recording | `service.rs`, `input.rs`, `keys.rs` | evdev devices from `/dev/input`, cursor position polled from `hyprctl cursorpos` at 60 Hz while recording, foreground changes from the Hyprland event socket |
+| Hotkeys | `hotkeys.rs` | Hyprland binds with the `global` dispatcher plus the `hyprland-global-shortcuts-v1` protocol, so the chord never reaches the focused app; software matching on the evdev stream as fallback |
+| Overlay | `overlay.rs` | wlr-layer-shell surfaces on the overlay layer with an empty input region, pixels from `platform/overlay_render.rs` through a viewport so fractional scales stay crisp |
+| Sleeper | `platform/sleeper.rs` | portable |
 
-The service thread (`win32/service_thread.rs`) also owns recording hooks, hotkeys and the overlay window:
+`service.rs` is the counterpart of the Win32 service thread: a calloop event loop owning the Wayland connection for the overlay and shortcuts, the evdev readers, the Hyprland event socket and the command channel.
+Injector and capture each keep their own Wayland connection so the player thread can use them synchronously.
 
-- Recording needs global input events. On Wayland that means reading `/dev/input` with the evdev crate, which requires the user to be in the `input` group.
-- Hotkeys: the GlobalShortcuts portal, or matching chords inside the evdev reader.
-- Overlay: a layer-shell surface (wlr-layer-shell) with an input region of zero size, drawn with the same tiny-skia renderer used in `win32/overlay.rs`.
+## Coordinates
 
-## Windows-only seams outside the platform module
+Macros store physical pixels.
+Wayland lays outputs out in logical units, so `layout.rs` places every monitor at its logical position times the largest scale in use and keeps its pixel size; monitors never overlap and a single or uniformly scaled setup maps exactly.
+Cursor positions from Hyprland are logical integers, which limits recorded positions to the scale's granularity (1.6 pixels at scale 1.6).
 
-- `src/main.rs` picks the platform services and currently has a `compile_error!` on non-Windows.
-- `src/ui/mod.rs` elevation check, `src/ui/toolbar.rs` restart as administrator, `src/ui/overlay_scene.rs` cursor position for relative moves, `src/ui/region_picker.rs` monitor under the cursor. Each has a `#[cfg(not(windows))]` fallback; replace them with trait calls or Linux equivalents.
+## Keys
 
-## Testing without a display
+`keys.rs` maps evdev codes to the Windows virtual-key code and set 1 scan code the model uses, matching the extended-key conventions of the Win32 backend so a macro recorded on one platform plays on the other.
+Letters and digits follow the layout: the xkb keymap decides that the key at the position of US `Z` records as `Y` on a German layout, exactly like Windows does.
+Injection prefers the scan code (position) and falls back to the virtual-key code through the layout.
 
-`src/platform/mock.rs` provides mock implementations with a virtual clock. The engine tests in `tests/` run against them and should pass unchanged on Linux.
+## Hyprland specifics
+
+The IPC client in `hyprland.rs` speaks both config styles: `keyword` and `dispatch <text>` on classic configs, `eval` with Lua (`hl.bind`, `hl.layer_rule`, `hl.dispatch(hl.dsp...)`) on the Lua parser, detected from the first refusal.
+Binds are re-applied when the `configreloaded` event arrives since a reload drops dynamic ones.
+A `no_screen_share` layer rule keeps the overlay out of captures unless `MACRO_OVERLAY_CAPTURABLE` is set.
+
+## Limits
+
+- The recorder sees hardware input only: taps on touchpads are synthesized by the compositor and are not recorded, physical buttons and mice are.
+- Without Hyprland there is no cursor position, no window activation and no swallowed hotkey chords; fallback chords still trigger but also reach the focused application.
+- Injected input is compositor level, so recordings never contain the macro's own playback and every physical key or button press interrupts playback when auto-stop is on.
+
+## Other compositors
+
+Cursor position, window list, focus and binds are the only compositor-specific parts and all live behind `hyprland.rs`, `window.rs` and `hotkeys.rs`.
+A sway or KWin port would add an equivalent client (`swaymsg`, KWin scripting) and choose it in `service.rs` and `platform::linux::services`.

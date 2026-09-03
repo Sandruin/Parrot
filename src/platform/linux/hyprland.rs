@@ -140,27 +140,33 @@ impl Hyprland {
         self.json("monitors")
     }
 
-    /// Runs a dispatcher such as `focuswindow address:0x...`.
-    pub fn dispatch(&self, args: &str) -> Result<()> {
-        let reply = self.request(&format!("dispatch {args}"))?;
-        expect_ok(&reply, &format!("dispatch {args}"))
+    /// Runs a dispatcher given as classic text such as `focuswindow address:0x...` and as a Lua
+    /// dispatcher expression such as `hl.dsp.focus({ window = "address:0x..." })`.
+    pub fn dispatch(&self, legacy: &str, lua: &str) -> Result<()> {
+        self.styled(&format!("dispatch {legacy}"), "hl.dispatch", &format!("eval return hl.dispatch({lua})"))
     }
 
     /// Applies a config line: `legacy` through `keyword` on classic configs, `lua` through `eval` otherwise.
     pub fn configure(&self, legacy: &str, lua: &str) -> Result<()> {
+        self.styled(&format!("keyword {legacy}"), "non-legacy", &format!("eval {lua}"))
+    }
+
+    /// Sends the classic request unless the instance is known to parse Lua; an error reply containing
+    /// `marker` reveals the Lua parser and switches every later call to the Lua form.
+    fn styled(&self, classic: &str, marker: &str, lua: &str) -> Result<()> {
         if self.style.load(Ordering::Relaxed) != STYLE_LUA {
-            let reply = self.request(&format!("keyword {legacy}"))?;
+            let reply = self.request(classic)?;
             if reply.trim() == "ok" {
                 self.style.store(STYLE_LEGACY, Ordering::Relaxed);
                 return Ok(());
             }
-            if !reply.contains("non-legacy") {
-                bail!("hyprctl keyword {legacy}: {}", reply.trim());
+            if !reply.contains(marker) {
+                bail!("hyprctl {classic}: {}", reply.trim());
             }
             self.style.store(STYLE_LUA, Ordering::Relaxed);
         }
-        let reply = self.request(&format!("eval {lua}"))?;
-        expect_ok(&reply, &format!("eval {lua}"))
+        let reply = self.request(lua)?;
+        expect_ok(&reply, lua)
     }
 
     /// Connects to the event socket; lines of the form `name>>data` arrive as things happen.
