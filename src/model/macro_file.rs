@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -141,6 +142,28 @@ impl Macro {
         Some(self.items.remove(idx))
     }
 
+    /// Inserts copies of `items` at `index` with fresh ids and returns those ids.
+    pub fn insert_all(&mut self, index: usize, items: &[ActionItem]) -> Vec<ActionId> {
+        let index = index.min(self.items.len());
+        let first = self.next_id();
+        let copies: Vec<ActionItem> = items
+            .iter()
+            .enumerate()
+            .map(|(offset, item)| ActionItem { id: first + offset as ActionId, ..item.clone() })
+            .collect();
+        let ids = copies.iter().map(|c| c.id).collect();
+        self.items.splice(index..index, copies);
+        ids
+    }
+
+    /// Removes every item in `ids` and returns them in list order.
+    pub fn remove_all(&mut self, ids: &HashSet<ActionId>) -> Vec<ActionItem> {
+        let (removed, kept) =
+            std::mem::take(&mut self.items).into_iter().partition(|item| ids.contains(&item.id));
+        self.items = kept;
+        removed
+    }
+
     /// Duplicates the item directly after itself and returns the copy's id.
     pub fn duplicate(&mut self, id: ActionId) -> Option<ActionId> {
         let idx = self.index_of(id)?;
@@ -163,6 +186,39 @@ impl Macro {
         let item = self.items.remove(idx);
         self.items.insert(target, item);
         true
+    }
+
+    /// Duplicates every item in `ids` after the last of them and returns the copies' ids.
+    pub fn duplicate_all(&mut self, ids: &HashSet<ActionId>) -> Vec<ActionId> {
+        let picked: Vec<ActionItem> =
+            self.items.iter().filter(|item| ids.contains(&item.id)).cloned().collect();
+        let Some(last) = self.items.iter().rposition(|item| ids.contains(&item.id)) else {
+            return Vec::new();
+        };
+        self.insert_all(last + 1, &picked)
+    }
+
+    /// Moves every item in `ids` by `delta` positions, keeping their relative order.
+    pub fn shift_all(&mut self, ids: &HashSet<ActionId>, delta: isize) -> bool {
+        let mut moved = false;
+        for _ in 0..delta.unsigned_abs() {
+            if delta < 0 {
+                for i in 1..self.items.len() {
+                    if ids.contains(&self.items[i].id) && !ids.contains(&self.items[i - 1].id) {
+                        self.items.swap(i - 1, i);
+                        moved = true;
+                    }
+                }
+            } else {
+                for i in (0..self.items.len().saturating_sub(1)).rev() {
+                    if ids.contains(&self.items[i].id) && !ids.contains(&self.items[i + 1].id) {
+                        self.items.swap(i, i + 1);
+                        moved = true;
+                    }
+                }
+            }
+        }
+        moved
     }
 
     fn migrate(&mut self) -> Result<()> {
@@ -300,6 +356,63 @@ mod tests {
         assert!(m.remove(b).is_some());
         assert_eq!(m.items.len(), 3);
         assert_eq!(m.next_id(), d + 1);
+    }
+
+    /// Builds a macro of labelled items and returns their ids in list order.
+    fn labels(names: &[&str]) -> (Macro, Vec<ActionId>) {
+        let mut m = Macro::default();
+        let ids = names.iter().map(|n| m.push(Action::Label { name: (*n).into() })).collect();
+        (m, ids)
+    }
+
+    fn names(m: &Macro) -> Vec<String> {
+        m.items
+            .iter()
+            .map(|i| match &i.action {
+                Action::Label { name } => name.clone(),
+                other => format!("{other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn remove_all_returns_items_in_list_order() {
+        let (mut m, ids) = labels(&["a", "b", "c", "d"]);
+        let removed = m.remove_all(&HashSet::from([ids[2], ids[0]]));
+        assert_eq!(removed.iter().map(|i| i.id).collect::<Vec<_>>(), vec![ids[0], ids[2]]);
+        assert_eq!(names(&m), ["b", "d"]);
+        assert!(m.remove_all(&HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn insert_all_gives_copies_fresh_ids() {
+        let (mut m, ids) = labels(&["a", "b"]);
+        let copies: Vec<_> = m.items.clone();
+        let new_ids = m.insert_all(1, &copies);
+        assert_eq!(names(&m), ["a", "a", "b", "b"]);
+        assert!(new_ids.iter().all(|id| !ids.contains(id)));
+        assert_eq!(m.items.iter().map(|i| i.id).collect::<HashSet<_>>().len(), 4);
+    }
+
+    #[test]
+    fn duplicate_all_lands_after_the_last_selected_item() {
+        let (mut m, ids) = labels(&["a", "b", "c"]);
+        let new_ids = m.duplicate_all(&HashSet::from([ids[0], ids[2]]));
+        assert_eq!(names(&m), ["a", "b", "c", "a", "c"]);
+        assert_eq!(new_ids.len(), 2);
+        assert!(m.duplicate_all(&HashSet::new()).is_empty());
+    }
+
+    #[test]
+    fn shift_all_moves_a_gapped_selection_as_a_unit() {
+        let (mut m, ids) = labels(&["a", "b", "c", "d"]);
+        let picked = HashSet::from([ids[1], ids[3]]);
+        assert!(m.shift_all(&picked, -1));
+        assert_eq!(names(&m), ["b", "a", "d", "c"]);
+        assert!(m.shift_all(&picked, 1));
+        assert_eq!(names(&m), ["a", "b", "c", "d"]);
+        assert!(!m.shift_all(&HashSet::from([ids[0]]), -1));
+        assert!(!m.shift_all(&HashSet::new(), 1));
     }
 
     #[test]

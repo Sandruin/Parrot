@@ -1,5 +1,6 @@
 mod action;
 pub mod b64;
+pub mod clipboard;
 mod hotkey;
 mod key_names;
 mod macro_file;

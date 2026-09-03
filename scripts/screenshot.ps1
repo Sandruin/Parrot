@@ -99,7 +99,8 @@ $g = [System.Drawing.Graphics]::FromImage($bmp)
 $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
 $dir = Split-Path -Parent $Out
 if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
-$bmp.Save((Join-Path (Get-Location) $Out), [System.Drawing.Imaging.ImageFormat]::Png)
+$full = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path (Get-Location) $Out }
+$bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
 $g.Dispose(); $bmp.Dispose()
 Write-Output "saved $Out ($w x $h) title=[$($window.Title)]"
 

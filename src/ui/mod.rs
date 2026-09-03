@@ -10,13 +10,15 @@ pub mod status_bar;
 pub mod style;
 pub mod toolbar;
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::engine::EngineHandle;
 use crate::model::{
-    Action, ActionId, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro, PlaybackOutcome, Point,
+    Action, ActionId, ActionItem, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro,
+    PlaybackOutcome, Point, clipboard,
 };
 use crate::platform::{ScreenCapture, WindowManager};
 
@@ -75,7 +77,14 @@ pub struct App {
     pub doc: Macro,
     pub path: Option<PathBuf>,
     pub dirty: bool,
+    /// Item the properties dialog and the overlay follow, the one last clicked.
     pub selected: Option<ActionId>,
+    /// Every selected item, always containing `selected`.
+    pub selection: HashSet<ActionId>,
+    /// Fixed end of a range grown with Shift+click or Shift+arrow.
+    anchor: Option<ActionId>,
+    /// Actions held by cut or copy, in list order.
+    clipboard: Vec<ActionItem>,
     pub mode: Mode,
     pub settings: AppSettings,
     pub engine: EngineHandle,
@@ -121,6 +130,9 @@ impl App {
             path: None,
             dirty: false,
             selected: None,
+            selection: HashSet::new(),
+            anchor: None,
+            clipboard: Vec::new(),
             mode: Mode::Idle,
             settings,
             engine,
@@ -168,11 +180,83 @@ impl App {
         self.open_properties();
     }
 
+    /// Replaces the whole selection with a single item, or clears it.
     pub fn select(&mut self, id: Option<ActionId>) {
         if self.selected != id {
             self.editing_comment = None;
         }
         self.selected = id;
+        self.anchor = id;
+        self.selection = id.into_iter().collect();
+    }
+
+    /// Ctrl+click: adds or removes one item, leaving the rest of the selection alone.
+    pub fn toggle_select(&mut self, id: ActionId) {
+        self.editing_comment = None;
+        if self.selection.remove(&id) {
+            if self.selected == Some(id) {
+                let next = self.doc.items.iter().map(|i| i.id).find(|i| self.selection.contains(i));
+                self.selected = next;
+                self.anchor = next;
+            }
+        } else {
+            self.selection.insert(id);
+            self.selected = Some(id);
+            self.anchor = Some(id);
+        }
+    }
+
+    /// Shift+click: selects everything between the anchor and `id`.
+    pub fn extend_select(&mut self, id: ActionId) {
+        let Some(anchor) = self.anchor.and_then(|a| self.doc.index_of(a)) else {
+            self.select(Some(id));
+            return;
+        };
+        let Some(target) = self.doc.index_of(id) else {
+            return;
+        };
+        let range = anchor.min(target)..=anchor.max(target);
+        self.selection = self.doc.items[range].iter().map(|i| i.id).collect();
+        self.selected = Some(id);
+        self.editing_comment = None;
+    }
+
+    /// Arrow keys: moves a single selection up or down the list.
+    pub fn step_selection(&mut self, delta: isize) {
+        if self.doc.items.is_empty() {
+            return;
+        }
+        let last = self.doc.items.len() as isize - 1;
+        let next = match self.selected_index() {
+            Some(index) => (index as isize + delta).clamp(0, last),
+            None if delta > 0 => 0,
+            None => last,
+        };
+        let id = self.doc.items[next as usize].id;
+        self.select(Some(id));
+        self.scroll_to = Some(id);
+    }
+
+    /// Shift+arrow: grows or shrinks the range by moving its free end.
+    pub fn extend_by(&mut self, delta: isize) {
+        let Some(index) = self.selected_index() else {
+            self.step_selection(delta);
+            return;
+        };
+        let last = self.doc.items.len() as isize - 1;
+        let target = (index as isize + delta).clamp(0, last) as usize;
+        let id = self.doc.items[target].id;
+        self.extend_select(id);
+        self.scroll_to = Some(id);
+    }
+
+    pub fn select_all(&mut self) {
+        self.selection = self.doc.items.iter().map(|i| i.id).collect();
+        if self.selected.is_none() {
+            self.selected = self.doc.items.first().map(|i| i.id);
+            self.anchor = self.selected;
+        }
+        self.editing_comment = None;
     }
 
     pub fn open_properties(&mut self) {
@@ -182,32 +266,102 @@ impl App {
     }
 
     pub fn duplicate_selected(&mut self) {
-        if let Some(new_id) = self.selected.and_then(|id| self.doc.duplicate(id)) {
-            self.dirty = true;
-            self.select(Some(new_id));
-            self.scroll_to = Some(new_id);
+        let ids = self.doc.duplicate_all(&self.selection);
+        if ids.is_empty() {
+            return;
         }
+        self.dirty = true;
+        self.select_ids(&ids);
     }
 
     pub fn delete_selected(&mut self) {
-        let Some(id) = self.selected else { return };
-        let index = self.doc.index_of(id);
-        if self.doc.remove(id).is_some() {
-            self.dirty = true;
-            let next = index
-                .and_then(|i| self.doc.items.get(i).or_else(|| self.doc.items.last()))
-                .map(|item| item.id);
-            self.select(next);
+        let count = self.selection.len();
+        if self.remove_selection() {
+            self.info(format!("Deleted {count} {}", actions(count)));
         }
     }
 
-    pub fn move_selected(&mut self, delta: isize) {
-        if let Some(id) = self.selected
-            && self.doc.shift(id, delta)
-        {
-            self.dirty = true;
-            self.scroll_to = Some(id);
+    /// Copies the selection, also as JSON on the system clipboard so other windows can take it.
+    pub fn copy_selected(&mut self, ctx: &egui::Context) {
+        let items = self.selected_items();
+        if items.is_empty() {
+            return;
         }
+        ctx.copy_text(clipboard::encode(&items));
+        self.clipboard = items;
+        let count = self.clipboard.len();
+        self.info(format!("Copied {count} {}", actions(count)));
+    }
+
+    pub fn cut_selected(&mut self, ctx: &egui::Context) {
+        let items = self.selected_items();
+        if items.is_empty() {
+            return;
+        }
+        let count = items.len();
+        ctx.copy_text(clipboard::encode(&items));
+        self.clipboard = items;
+        self.remove_selection();
+        self.info(format!("Cut {count} {}", actions(count)));
+    }
+
+    /// Pastes actions out of clipboard text, keeping the last cut or copy as a fallback.
+    pub fn paste_text(&mut self, text: &str) {
+        if let Some(items) = clipboard::decode(text) {
+            self.clipboard = items;
+        }
+        self.paste_clipboard();
+    }
+
+    /// Inserts the clipboard after the selected item, or at the end, and selects the copies.
+    pub fn paste_clipboard(&mut self) {
+        if self.clipboard.is_empty() {
+            return;
+        }
+        let index = self.selected_index().map_or(self.doc.items.len(), |i| i + 1);
+        let ids = self.doc.insert_all(index, &self.clipboard);
+        self.dirty = true;
+        self.select_ids(&ids);
+        self.info(format!("Pasted {} {}", ids.len(), actions(ids.len())));
+    }
+
+    pub fn move_selected(&mut self, delta: isize) {
+        if self.doc.shift_all(&self.selection, delta) {
+            self.dirty = true;
+            self.scroll_to = self.selected;
+        }
+    }
+
+    /// Whether cut or copy has put something on the clipboard.
+    pub fn can_paste(&self) -> bool {
+        !self.clipboard.is_empty()
+    }
+
+    /// The selected items in list order.
+    fn selected_items(&self) -> Vec<ActionItem> {
+        self.doc.items.iter().filter(|i| self.selection.contains(&i.id)).cloned().collect()
+    }
+
+    /// Selects exactly `ids`, focusing the first one.
+    fn select_ids(&mut self, ids: &[ActionId]) {
+        self.selected = ids.first().copied();
+        self.anchor = self.selected;
+        self.selection = ids.iter().copied().collect();
+        self.scroll_to = self.selected;
+        self.editing_comment = None;
+    }
+
+    /// Drops every selected item and selects whatever took the first one's place.
+    fn remove_selection(&mut self) -> bool {
+        let first = self.doc.items.iter().position(|i| self.selection.contains(&i.id));
+        if self.doc.remove_all(&self.selection).is_empty() {
+            return false;
+        }
+        self.dirty = true;
+        let next =
+            first.and_then(|i| self.doc.items.get(i).or_else(|| self.doc.items.last())).map(|item| item.id);
+        self.select(next);
+        true
     }
 
     pub fn start_recording(&mut self) {
@@ -469,6 +623,11 @@ fn foreground_is_elevated(services: &UiServices) -> bool {
 #[cfg(not(windows))]
 fn foreground_is_elevated(_services: &UiServices) -> bool {
     false
+}
+
+/// "action" or "actions", for status messages that count items.
+fn actions(count: usize) -> &'static str {
+    if count == 1 { "action" } else { "actions" }
 }
 
 /// File name of our own executable, used to skip ourselves when reading the foreground window.

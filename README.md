@@ -11,6 +11,7 @@ A small desktop macro recorder for Windows, written in Rust with egui. Record ke
 - [x] Auto-stop when you press a key or mouse button during playback
 - [x] Global hotkeys (F9 record, F10 play, Esc stop, all configurable)
 - [x] Drag to reorder, double-click to edit, comments per action
+- [x] Multi-select with Ctrl+A, Ctrl+click, Shift+click and Shift+arrow, then cut, copy and paste (Ctrl+X/C/V)
 - [x] Scan-code key injection so DirectInput games see the keys
 - [x] Relative mouse moves for raw-input games
 - [x] Wait for an image region to match, with a screen region picker
@@ -30,6 +31,8 @@ A small desktop macro recorder for Windows, written in Rust with egui. Record ke
 cargo run --release
 cargo run --release -- path\to\macro.json
 ```
+
+Macros are saved to `Documents/Parrot` by default; the folder is created on first start. Copied actions travel through the system clipboard as JSON, so they can be pasted into another window or into a text editor.
 
 Requires Rust 1.95 or newer. On Windows the build embeds a per-monitor DPI manifest so coordinates are physical pixels everywhere.
 

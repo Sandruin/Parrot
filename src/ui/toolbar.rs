@@ -254,10 +254,10 @@ fn misc_items(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn edit_buttons(app: &mut App, ui: &mut egui::Ui) {
-    let enabled = app.selected.is_some() && !app.mode.is_busy();
+    let enabled = !app.selection.is_empty() && !app.mode.is_busy();
     let buttons = [
-        (icons::ICON_DELETE, "Delete the selected action (Del)"),
-        (icons::ICON_CONTENT_COPY, "Duplicate the selected action (Ctrl+D)"),
+        (icons::ICON_DELETE, "Delete the selection (Del)"),
+        (icons::ICON_CONTENT_COPY, "Duplicate the selection (Ctrl+D)"),
         (icons::ICON_EDIT, "Edit the selected action (Enter)"),
     ];
     for (index, (glyph, hint)) in buttons.into_iter().enumerate() {

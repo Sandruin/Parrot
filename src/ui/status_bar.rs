@@ -8,6 +8,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     ui.add_space(3.0);
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("{} actions", app.doc.items.len())).font(style::medium(12.5)));
+        if app.selection.len() > 1 {
+            ui.label(
+                RichText::new(format!("{} selected", app.selection.len()))
+                    .font(style::medium(12.5))
+                    .color(ui.visuals().weak_text_color()),
+            );
+        }
         ui.separator();
 
         let mode_color = match app.mode {

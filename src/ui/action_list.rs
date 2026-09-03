@@ -30,32 +30,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         return;
     }
 
-    let selected = app.selected;
+    let selection = app.selection.clone();
+    let focused = app.selected;
     let running = app.running;
     let editing = app.editing_comment;
     let scroll_to = app.scroll_to.take();
     let accent = style::accent(ui.visuals());
     let running_tint = style::play_green(ui.visuals());
 
+    let can_paste = app.can_paste();
     let mut clicked = None;
     let mut open = None;
     let mut edit_comment = None;
+    let mut command = None;
     let mut changed = false;
 
+    let mods = ui.input(|i| i.modifiers);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let spacing = ui.spacing().item_spacing.x;
         let value_w = value_width(ui.available_width(), spacing);
         let response =
             egui_dnd::dnd(ui, "actions").show_vec(&mut app.doc.items, |ui, item, handle, state| {
-                let is_selected = selected == Some(item.id);
+                let is_selected = selection.contains(&item.id);
+                let is_focused = focused == Some(item.id);
                 let is_running = running == Some(item.id);
                 let (rect, row) =
                     ui.allocate_exact_size(Vec2::new(ui.available_width(), ROW_HEIGHT), Sense::click());
 
                 let bg = if is_running {
                     running_tint.gamma_multiply(0.35)
-                } else if is_selected {
+                } else if is_focused {
                     ui.visuals().selection.bg_fill
+                } else if is_selected {
+                    ui.visuals().selection.bg_fill.gamma_multiply(0.55)
                 } else if state.index % 2 == 1 {
                     ui.visuals().faint_bg_color
                 } else {
@@ -147,6 +154,26 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 if row.double_clicked() {
                     open = Some(item.id);
                 }
+                if row.secondary_clicked() && !is_selected {
+                    clicked = Some(item.id);
+                }
+                row.context_menu(|ui| {
+                    ui.set_min_width(170.0);
+                    for (label, shortcut, wanted, enabled) in [
+                        ("Cut", "Ctrl+X", RowCommand::Cut, true),
+                        ("Copy", "Ctrl+C", RowCommand::Copy, true),
+                        ("Paste", "Ctrl+V", RowCommand::Paste, can_paste),
+                        ("Duplicate", "Ctrl+D", RowCommand::Duplicate, true),
+                        ("Delete", "Del", RowCommand::Delete, true),
+                        ("Properties", "Enter", RowCommand::Properties, true),
+                    ] {
+                        let button = egui::Button::new(label).shortcut_text(shortcut);
+                        if ui.add_enabled(enabled, button).clicked() {
+                            command = Some(wanted);
+                            ui.close();
+                        }
+                    }
+                });
             });
         if response.is_drag_finished() {
             changed = true;
@@ -154,7 +181,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     if let Some(id) = clicked {
-        app.select(Some(id));
+        if mods.command {
+            app.toggle_select(id);
+        } else if mods.shift {
+            app.extend_select(id);
+        } else {
+            app.select(Some(id));
+        }
     }
     if let Some(target) = edit_comment {
         app.editing_comment = target;
@@ -163,9 +196,54 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.select(Some(id));
         app.open_properties();
     }
+    match command {
+        Some(RowCommand::Cut) => app.cut_selected(ui.ctx()),
+        Some(RowCommand::Copy) => app.copy_selected(ui.ctx()),
+        Some(RowCommand::Paste) => app.paste_clipboard(),
+        Some(RowCommand::Duplicate) => app.duplicate_selected(),
+        Some(RowCommand::Delete) => app.delete_selected(),
+        Some(RowCommand::Properties) => app.open_properties(),
+        None => {}
+    }
     if changed {
         app.dirty = true;
     }
+}
+
+/// Takes the clipboard events off the queue; egui turns Ctrl+X, Ctrl+C and Ctrl+V into these.
+fn clipboard_events(ctx: &egui::Context) -> (bool, bool, Option<String>) {
+    let mut cut = false;
+    let mut copy = false;
+    let mut paste = None;
+    ctx.input_mut(|i| {
+        i.events.retain(|event| match event {
+            egui::Event::Cut => {
+                cut = true;
+                false
+            }
+            egui::Event::Copy => {
+                copy = true;
+                false
+            }
+            egui::Event::Paste(text) => {
+                paste = Some(text.clone());
+                false
+            }
+            _ => true,
+        });
+    });
+    (cut, copy, paste)
+}
+
+/// What a row's context menu asked for, applied once the list is drawn.
+#[derive(Clone, Copy)]
+enum RowCommand {
+    Cut,
+    Copy,
+    Paste,
+    Duplicate,
+    Delete,
+    Properties,
 }
 
 fn header(ui: &mut egui::Ui) {
@@ -248,13 +326,28 @@ fn shortcuts(app: &mut App, ctx: &egui::Context) {
             i.consume_key(Modifiers::COMMAND, Key::ArrowUp),
             i.consume_key(Modifiers::COMMAND, Key::ArrowDown),
             i.consume_key(Modifiers::COMMAND, Key::D),
+            i.consume_key(Modifiers::COMMAND, Key::A),
             i.consume_key(Modifiers::NONE, Key::Delete),
             i.consume_key(Modifiers::NONE, Key::Enter),
+            i.consume_key(Modifiers::SHIFT, Key::ArrowUp),
+            i.consume_key(Modifiers::SHIFT, Key::ArrowDown),
             i.consume_key(Modifiers::NONE, Key::ArrowUp),
             i.consume_key(Modifiers::NONE, Key::ArrowDown),
         ]
     });
-    let [move_up, move_down, duplicate, delete, enter, select_up, select_down] = keys;
+    let [
+        move_up,
+        move_down,
+        duplicate,
+        select_all,
+        delete,
+        enter,
+        extend_up,
+        extend_down,
+        select_up,
+        select_down,
+    ] = keys;
+    let (cut, copy, paste) = clipboard_events(ctx);
 
     if move_up {
         app.move_selected(-1);
@@ -265,31 +358,34 @@ fn shortcuts(app: &mut App, ctx: &egui::Context) {
     if duplicate {
         app.duplicate_selected();
     }
+    if select_all {
+        app.select_all();
+    }
+    if copy {
+        app.copy_selected(ctx);
+    }
+    if cut {
+        app.cut_selected(ctx);
+    }
+    if let Some(text) = paste {
+        app.paste_text(&text);
+    }
     if delete {
         app.delete_selected();
     }
     if enter {
         app.open_properties();
     }
+    if extend_up {
+        app.extend_by(-1);
+    }
+    if extend_down {
+        app.extend_by(1);
+    }
     if select_up {
-        step_selection(app, -1);
+        app.step_selection(-1);
     }
     if select_down {
-        step_selection(app, 1);
+        app.step_selection(1);
     }
-}
-
-fn step_selection(app: &mut App, delta: isize) {
-    if app.doc.items.is_empty() {
-        return;
-    }
-    let last = app.doc.items.len() as isize - 1;
-    let next = match app.selected_index() {
-        Some(index) => (index as isize + delta).clamp(0, last),
-        None if delta > 0 => 0,
-        None => last,
-    };
-    let id: ActionId = app.doc.items[next as usize].id;
-    app.select(Some(id));
-    app.scroll_to = Some(id);
 }
