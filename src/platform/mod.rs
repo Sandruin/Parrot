@@ -4,4 +4,6 @@ mod traits;
 #[cfg(windows)]
 pub mod win32;
 
-pub use traits::{InputInjector, ScreenCapture, Sleeper, WaitResult, WindowInfo, WindowManager, WindowRef};
+pub use traits::{
+    CharKey, InputInjector, ScreenCapture, Sleeper, WaitResult, WindowInfo, WindowManager, WindowRef,
+};

@@ -17,6 +17,15 @@ pub struct WindowInfo {
     pub process_name: String,
 }
 
+/// Key plus modifiers that produce a character on the active keyboard layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CharKey {
+    pub key: Key,
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
 /// Sends synthetic input; every call is tagged so the hooks can recognise it as our own.
 pub trait InputInjector: Send + Sync {
     fn key(&self, key: Key, down: bool) -> Result<()>;
@@ -27,6 +36,10 @@ pub trait InputInjector: Send + Sync {
     /// `delta` in multiples of 120, positive is up or right.
     fn mouse_wheel(&self, delta: i32, horizontal: bool) -> Result<()>;
     fn cursor_pos(&self) -> Result<Point>;
+    /// Scan-code chord for `ch` on the current layout, `None` when the platform cannot tell.
+    fn key_for_char(&self, _ch: char) -> Option<CharKey> {
+        None
+    }
 }
 
 pub trait ScreenCapture: Send + Sync {
