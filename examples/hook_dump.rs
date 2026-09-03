@@ -4,7 +4,11 @@ use anyhow::Result;
 use macro_recorder::model::{HotkeyConfig, RawInputEvent, Win32Command};
 use macro_recorder::platform::win32;
 
-const DURATION: Duration = Duration::from_secs(10);
+/// Seconds to dump for, overridable with the first argument.
+fn duration() -> Duration {
+    let secs = std::env::args().nth(1).and_then(|a| a.parse().ok()).unwrap_or(10);
+    Duration::from_secs(secs)
+}
 
 fn main() -> Result<()> {
     win32::dpi::ensure_per_monitor_v2();
@@ -15,10 +19,11 @@ fn main() -> Result<()> {
     service.send(Win32Command::SetHotkeys(HotkeyConfig::default()));
     service.send(Win32Command::EnableHooks(true));
 
-    println!("dumping raw input for {DURATION:?}, move the mouse and press a few keys");
+    let duration = duration();
+    println!("dumping raw input for {duration:?}, move the mouse and press a few keys");
     let start = Instant::now();
     let mut count = 0usize;
-    while let Some(remaining) = DURATION.checked_sub(start.elapsed()) {
+    while let Some(remaining) = duration.checked_sub(start.elapsed()) {
         match raw_rx.recv_timeout(remaining) {
             Ok(event) => {
                 count += 1;
