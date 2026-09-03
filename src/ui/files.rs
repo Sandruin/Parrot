@@ -50,7 +50,7 @@ pub fn save_as(app: &mut App) -> bool {
         .as_ref()
         .and_then(|p| p.file_name())
         .map_or_else(|| "macro.json".to_string(), |n| n.to_string_lossy().to_string());
-    let Some(path) = dialog().set_file_name(suggested).save_file() else {
+    let Some(path) = dialog(app).set_file_name(suggested).save_file() else {
         return false;
     };
     write(app, &path)
@@ -141,7 +141,7 @@ fn reset(app: &mut App) {
 }
 
 fn pick_and_open(app: &mut App) {
-    if let Some(path) = dialog().pick_file() {
+    if let Some(path) = dialog(app).pick_file() {
         load(app, &path);
     }
 }
@@ -187,6 +187,47 @@ fn remember(app: &mut App, path: &Path) {
     }
 }
 
-fn dialog() -> rfd::FileDialog {
-    rfd::FileDialog::new().add_filter("Macro", &["json"]).set_title("Macro file")
+/// Folder macro files live in by default, `Documents/Parrot`.
+pub fn default_dir_path() -> Option<PathBuf> {
+    dirs::document_dir().map(|d| d.join("Parrot"))
+}
+
+/// The default folder, created if it does not exist yet.
+pub fn default_dir() -> Option<PathBuf> {
+    let dir = default_dir_path()?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("cannot create {}: {e:#}", dir.display());
+        return None;
+    }
+    Some(dir)
+}
+
+/// Where the file dialogs open: the current file's folder, else the default one.
+fn start_dir(app: &App) -> Option<PathBuf> {
+    app.path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .filter(|d| d.is_dir())
+        .map(Path::to_path_buf)
+        .or_else(default_dir)
+}
+
+fn dialog(app: &App) -> rfd::FileDialog {
+    let mut dialog = rfd::FileDialog::new().add_filter("Macro", &["json"]).set_title("Macro file");
+    if let Some(dir) = start_dir(app) {
+        dialog = dialog.set_directory(dir);
+    }
+    dialog
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_dir_sits_in_documents() {
+        let Some(dir) = default_dir_path() else { return };
+        assert_eq!(dir.file_name().unwrap(), "Parrot");
+        assert_eq!(dir.parent(), dirs::document_dir().as_deref());
+    }
 }

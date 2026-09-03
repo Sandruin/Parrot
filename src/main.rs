@@ -11,6 +11,7 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let settings = model::AppSettings::load_or_default();
+    let _ = ui::files::default_dir();
     let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
 
     #[cfg(not(windows))]
