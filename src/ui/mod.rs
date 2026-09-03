@@ -18,10 +18,13 @@ use crate::engine::EngineHandle;
 use crate::model::{
     Action, ActionId, AppSettings, EngineCommand, EngineEvent, HotkeyAction, Macro, PlaybackOutcome, Point,
 };
-use crate::platform::{ScreenCapture, WindowManager};
+use crate::platform::{InputInjector, ScreenCapture, WindowManager};
 
 /// How often the foreground window's elevation is re-checked.
 const ELEVATION_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Delay between hiding the overlay and screenshotting for the region picker, so it is not in the shot.
+const PICK_DELAY: Duration = Duration::from_millis(150);
 
 /// How often the cursor is re-read while a cursor-anchored overlay is up.
 const CURSOR_INTERVAL: Duration = Duration::from_millis(100);
@@ -29,8 +32,16 @@ const CURSOR_INTERVAL: Duration = Duration::from_millis(100);
 /// Platform services the GUI itself needs, cloned from the ones the engine runs on.
 #[derive(Clone)]
 pub struct UiServices {
+    pub injector: Arc<dyn InputInjector>,
     pub capture: Arc<dyn ScreenCapture>,
     pub windows: Arc<dyn WindowManager>,
+}
+
+impl UiServices {
+    /// Where the mouse cursor is right now, in physical virtual-screen pixels.
+    pub fn cursor_pos(&self) -> Point {
+        self.injector.cursor_pos().unwrap_or_default()
+    }
 }
 
 /// What the app is currently doing; drives which buttons are enabled.
@@ -94,6 +105,8 @@ pub struct App {
     pub confirm: Option<files::Pending>,
     /// Armed while the fullscreen region picker viewport is up.
     pub region_picker: Option<region_picker::Picker>,
+    /// Region pick waiting for the overlay to disappear before the screenshot is taken.
+    region_pick_pending: Option<(ActionId, Instant)>,
     /// Whether we ourselves run elevated, checked once at startup.
     pub elevated: bool,
     /// Set while the foreground window is elevated and we are not.
@@ -135,6 +148,7 @@ impl App {
             scroll_to: None,
             confirm: None,
             region_picker: None,
+            region_pick_pending: None,
             elevated: self_is_elevated(),
             elevation_warning: false,
             elevation_checked: None,
@@ -326,7 +340,8 @@ impl App {
 
     /// Mirrors the selection to the overlay, hiding it while recording or playing.
     fn sync_overlay(&mut self) {
-        let wanted = if self.settings.show_overlay && !self.mode.is_busy() {
+        let picking = self.region_pick_pending.is_some() || self.region_picker.is_some();
+        let wanted = if self.settings.show_overlay && !self.mode.is_busy() && !picking {
             self.selected
                 .and_then(|id| self.doc.item(id))
                 .filter(|item| item.action.is_positional())
@@ -339,7 +354,7 @@ impl App {
         }
         match &wanted {
             Some(action) => {
-                let cursor = overlay_scene::cursor_pos();
+                let cursor = self.services.cursor_pos();
                 self.overlay_anchor = Some(cursor);
                 self.engine.send(EngineCommand::ShowOverlay(overlay_scene::for_action_from(action, cursor)));
             }
@@ -362,7 +377,7 @@ impl App {
             return;
         }
         self.anchor_checked = Some(Instant::now());
-        let cursor = overlay_scene::cursor_pos();
+        let cursor = self.services.cursor_pos();
         if self.overlay_anchor.is_some_and(|anchor| !overlay_scene::cursor_moved(anchor, cursor)) {
             return;
         }
@@ -393,8 +408,19 @@ impl App {
         self.elevation_warning = !self.elevated && foreground_is_elevated(&self.services);
     }
 
-    /// Starts the region picker for the action the properties dialog is editing.
+    /// Starts the region picker for the action the properties dialog is editing, once the overlay is gone.
     pub fn pick_region(&mut self, target: ActionId) {
+        self.region_pick_pending = Some((target, Instant::now()));
+    }
+
+    /// Takes the region picker screenshot after the overlay had a moment to disappear.
+    fn poll_region_pick(&mut self, ctx: &egui::Context) {
+        let Some((target, since)) = self.region_pick_pending else { return };
+        if since.elapsed() < PICK_DELAY {
+            ctx.request_repaint_after(PICK_DELAY);
+            return;
+        }
+        self.region_pick_pending = None;
         region_picker::open(self, target);
     }
 
@@ -415,6 +441,7 @@ impl eframe::App for App {
             self.handle_event(event);
         }
         self.sync_overlay();
+        self.poll_region_pick(ctx);
         self.follow_cursor(ctx);
         self.sync_title(ctx);
         self.poll_elevation();

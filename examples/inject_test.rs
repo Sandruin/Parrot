@@ -2,22 +2,20 @@ use std::time::Duration;
 
 use anyhow::Result;
 use macro_recorder::model::Point;
-use macro_recorder::platform::InputInjector;
-use macro_recorder::platform::win32::injector::Win32Injector;
-use macro_recorder::platform::win32::{dpi, keys};
+use macro_recorder::platform::native;
 
 const SIDE: i32 = 80;
 const STEPS: i32 = 20;
 
 fn main() -> Result<()> {
-    dpi::ensure_per_monitor_v2();
+    native::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let type_text = std::env::args().any(|a| a == "--type");
 
     println!("starting in 3 seconds, focus a harmless window");
     std::thread::sleep(Duration::from_secs(3));
 
-    let injector = Win32Injector;
+    let injector = native::services()?.injector;
     let start = injector.cursor_pos()?;
     println!("cursor before: {}, {}", start.x, start.y);
 
@@ -43,7 +41,7 @@ fn main() -> Result<()> {
                 println!("  {ch:?} is not on the current layout");
                 continue;
             };
-            let shift = keys::key_from_vk(macro_recorder::model::vk::LSHIFT);
+            let shift = native::keys::key_from_vk(macro_recorder::model::vk::LSHIFT);
             if chord.shift {
                 injector.key(shift, true)?;
             }

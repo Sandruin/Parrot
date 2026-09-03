@@ -58,14 +58,7 @@ fn file_menu(app: &mut App, ui: &mut egui::Ui) {
         if ui.button("Settings...").clicked() {
             app.settings_open = true;
         }
-        if ui
-            .add_enabled(!app.elevated, Button::new("Restart as administrator"))
-            .on_hover_text("Needed to send input to windows that run elevated")
-            .on_disabled_hover_text("Already running as administrator")
-            .clicked()
-        {
-            restart_elevated(app, ui.ctx());
-        }
+        elevation_button(app, ui);
         if ui.button("Exit").clicked() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -74,17 +67,23 @@ fn file_menu(app: &mut App, ui: &mut egui::Ui) {
 
 /// Relaunches through the UAC prompt and closes this instance once the new one was started.
 #[cfg(windows)]
-fn restart_elevated(app: &mut App, ctx: &egui::Context) {
-    match crate::platform::win32::elevation::relaunch_elevated() {
-        Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-        Err(e) => app.error(format!("Could not restart as administrator: {e:#}")),
+fn elevation_button(app: &mut App, ui: &mut egui::Ui) {
+    if ui
+        .add_enabled(!app.elevated, Button::new("Restart as administrator"))
+        .on_hover_text("Needed to send input to windows that run elevated")
+        .on_disabled_hover_text("Already running as administrator")
+        .clicked()
+    {
+        match crate::platform::win32::elevation::relaunch_elevated() {
+            Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+            Err(e) => app.error(format!("Could not restart as administrator: {e:#}")),
+        }
     }
 }
 
+/// Elevation is a Windows concept; other platforms have no such menu entry.
 #[cfg(not(windows))]
-fn restart_elevated(app: &mut App, _ctx: &egui::Context) {
-    app.error("Restarting elevated is a Windows feature");
-}
+fn elevation_button(_app: &mut App, _ui: &mut egui::Ui) {}
 
 fn transport(app: &mut App, ui: &mut egui::Ui) {
     let visuals = ui.visuals();

@@ -5,20 +5,18 @@ use macro_recorder::engine::player::{Player, PlayerDeps};
 use macro_recorder::engine::{EngineDeps, spawn_engine};
 use macro_recorder::model::{Action, EngineCommand, EngineEvent, Macro, PlayerControl};
 use macro_recorder::platform::sleeper::RealSleeper;
-use macro_recorder::platform::win32::{
-    capture::Win32Capture, injector::Win32Injector, keys, ocr::Win32Ocr, window::Win32Windows,
-};
+use macro_recorder::platform::{PlatformServices, native};
 
 /// Plays "hi " into the focused window after 3 seconds, directly or through the engine thread.
 fn main() -> anyhow::Result<()> {
     env_logger::init();
     let through_engine = std::env::args().any(|a| a == "--engine");
     let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
-    let win32 = macro_recorder::platform::win32::spawn_win32_service(raw_tx)?;
+    let service = native::spawn_service(raw_tx)?;
 
     let mut doc = Macro::default();
     for vk in [0x48u16, 0x49, 0x20] {
-        doc.push(Action::KeyPress { key: keys::key_from_vk(vk) });
+        doc.push(Action::KeyPress { key: native::keys::key_from_vk(vk) });
     }
     println!("items: {:?}", doc.items.iter().map(|i| i.action.value_text()).collect::<Vec<_>>());
     println!(
@@ -27,17 +25,12 @@ fn main() -> anyhow::Result<()> {
     );
     std::thread::sleep(Duration::from_secs(3));
 
-    let deps = PlayerDeps {
-        injector: Arc::new(Win32Injector),
-        capture: Arc::new(Win32Capture),
-        windows: Arc::new(Win32Windows),
-        sleeper: Arc::new(RealSleeper::default()),
-        ocr: Arc::new(Win32Ocr),
-    };
+    let PlatformServices { injector, capture, windows, ocr } = native::services()?;
+    let deps = PlayerDeps { injector, capture, windows, sleeper: Arc::new(RealSleeper::default()), ocr };
     if through_engine {
         let engine = spawn_engine(EngineDeps {
             raw_rx,
-            win32_tx: win32.cmd_sender(),
+            platform_tx: service.cmd_sender(),
             repaint: Box::new(|| {}),
             injector: deps.injector.clone(),
             capture: deps.capture.clone(),

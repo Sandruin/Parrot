@@ -1,19 +1,19 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use macro_recorder::model::{HotkeyConfig, RawInputEvent, Win32Command};
-use macro_recorder::platform::win32;
+use macro_recorder::model::{HotkeyConfig, PlatformCommand, RawInputEvent};
+use macro_recorder::platform::native;
 
 const DURATION: Duration = Duration::from_secs(10);
 
 fn main() -> Result<()> {
-    win32::dpi::ensure_per_monitor_v2();
+    native::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
-    let service = win32::spawn_win32_service(raw_tx)?;
-    service.send(Win32Command::SetHotkeys(HotkeyConfig::default()));
-    service.send(Win32Command::EnableHooks(true));
+    let service = native::spawn_service(raw_tx)?;
+    service.send(PlatformCommand::SetHotkeys(HotkeyConfig::default()));
+    service.send(PlatformCommand::EnableHooks(true));
 
     println!("dumping raw input for {DURATION:?}, move the mouse and press a few keys");
     let start = Instant::now();

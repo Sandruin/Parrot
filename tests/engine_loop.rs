@@ -7,7 +7,7 @@ use image::RgbaImage;
 use macro_recorder::engine::{EngineDeps, EngineHandle, spawn_engine};
 use macro_recorder::model::{
     Action, ActionItem, EngineCommand, EngineEvent, Hotkey, HotkeyAction, HotkeyConfig, Key, Macro,
-    MacroSettings, PlaybackOutcome, Point, RawInputEvent, RecordOptions, Repeat, TimeUnit, Win32Command,
+    MacroSettings, PlatformCommand, PlaybackOutcome, Point, RawInputEvent, RecordOptions, Repeat, TimeUnit,
 };
 use macro_recorder::platform::mock::{MockCapture, MockInjector, MockOcr, MockWindowManager};
 use macro_recorder::platform::sleeper::RealSleeper;
@@ -15,7 +15,7 @@ use macro_recorder::platform::sleeper::RealSleeper;
 struct Rig {
     engine: EngineHandle,
     raw_tx: Sender<RawInputEvent>,
-    win32_rx: Receiver<Win32Command>,
+    platform_rx: Receiver<PlatformCommand>,
     repaints: Arc<AtomicUsize>,
     injector: Arc<MockInjector>,
 }
@@ -23,13 +23,13 @@ struct Rig {
 impl Rig {
     fn new() -> Self {
         let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
-        let (win32_tx, win32_rx) = crossbeam_channel::unbounded();
+        let (platform_tx, platform_rx) = crossbeam_channel::unbounded();
         let repaints = Arc::new(AtomicUsize::new(0));
         let counter = repaints.clone();
         let injector = Arc::new(MockInjector::default());
         let engine = spawn_engine(EngineDeps {
             raw_rx,
-            win32_tx,
+            platform_tx,
             repaint: Box::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
             }),
@@ -40,15 +40,15 @@ impl Rig {
             ocr: Arc::new(MockOcr::default()),
         })
         .unwrap();
-        Self { engine, raw_tx, win32_rx, repaints, injector }
+        Self { engine, raw_tx, platform_rx, repaints, injector }
     }
 
     fn event(&self) -> EngineEvent {
         self.engine.evt_rx.recv_timeout(Duration::from_secs(5)).expect("an engine event")
     }
 
-    fn win32(&self) -> Win32Command {
-        self.win32_rx.recv_timeout(Duration::from_secs(5)).expect("a win32 command")
+    fn platform(&self) -> PlatformCommand {
+        self.platform_rx.recv_timeout(Duration::from_secs(5)).expect("a platform command")
     }
 
     fn key(&self, vk: u16, down: bool, at: Instant) {
@@ -73,7 +73,7 @@ fn macro_of(actions: Vec<Action>) -> Arc<Macro> {
 fn recording_reports_items_with_running_provisional_ids() {
     let rig = Rig::new();
     rig.engine.send(EngineCommand::StartRecording(RecordOptions::default()));
-    assert!(matches!(rig.win32(), Win32Command::EnableHooks(true)));
+    assert!(matches!(rig.platform(), PlatformCommand::EnableHooks(true)));
     assert_eq!(rig.event(), EngineEvent::RecordingStarted);
 
     let t0 = Instant::now();
@@ -95,7 +95,7 @@ fn recording_reports_items_with_running_provisional_ids() {
     assert!(recorded.iter().all(|i| i.enabled && i.comment.is_empty()));
 
     rig.engine.send(EngineCommand::StopRecording);
-    assert!(matches!(rig.win32(), Win32Command::EnableHooks(false)));
+    assert!(matches!(rig.platform(), PlatformCommand::EnableHooks(false)));
     assert_eq!(rig.event(), EngineEvent::RecordingStopped);
     assert!(rig.repaints.load(Ordering::SeqCst) >= 5);
 }
@@ -104,7 +104,7 @@ fn recording_reports_items_with_running_provisional_ids() {
 fn a_held_key_is_flushed_when_recording_stops() {
     let rig = Rig::new();
     rig.engine.send(EngineCommand::StartRecording(RecordOptions::default()));
-    assert!(matches!(rig.win32(), Win32Command::EnableHooks(true)));
+    assert!(matches!(rig.platform(), PlatformCommand::EnableHooks(true)));
     assert_eq!(rig.event(), EngineEvent::RecordingStarted);
     rig.key(0x41, true, Instant::now());
     rig.engine.send(EngineCommand::StopRecording);
@@ -120,10 +120,10 @@ fn hotkey_chord_keys_are_stripped_from_the_next_recording() {
     let rig = Rig::new();
     let cfg = HotkeyConfig { toggle_record: Some(Hotkey::new(0, 0x74)), ..Default::default() };
     rig.engine.send(EngineCommand::SetHotkeys(cfg));
-    assert!(matches!(rig.win32(), Win32Command::SetHotkeys(_)));
+    assert!(matches!(rig.platform(), PlatformCommand::SetHotkeys(_)));
 
     rig.engine.send(EngineCommand::StartRecording(RecordOptions::default()));
-    assert!(matches!(rig.win32(), Win32Command::EnableHooks(true)));
+    assert!(matches!(rig.platform(), PlatformCommand::EnableHooks(true)));
     assert_eq!(rig.event(), EngineEvent::RecordingStarted);
 
     let t0 = Instant::now();
@@ -151,12 +151,12 @@ fn playback_reports_start_progress_and_finish() {
         Action::Wait { duration: 20.0, unit: TimeUnit::Ms },
     ]);
     rig.engine.send(EngineCommand::Play { macro_: m, start_index: 0 });
-    assert!(matches!(rig.win32(), Win32Command::PlaybackStarted(_)));
+    assert!(matches!(rig.platform(), PlatformCommand::PlaybackStarted(_)));
     assert_eq!(rig.event(), EngineEvent::PlaybackStarted { total: 2 });
     assert_eq!(rig.event(), EngineEvent::PlaybackProgress { index: 0, iteration: 1 });
     assert_eq!(rig.event(), EngineEvent::PlaybackProgress { index: 1, iteration: 1 });
     assert_eq!(rig.event(), EngineEvent::PlaybackFinished(PlaybackOutcome::Completed));
-    assert!(matches!(rig.win32(), Win32Command::PlaybackStopped));
+    assert!(matches!(rig.platform(), PlatformCommand::PlaybackStopped));
     assert_eq!(rig.injector.calls().len(), 3);
 }
 
@@ -178,7 +178,7 @@ fn stop_playback_and_the_stop_hotkey_both_end_an_endless_run() {
             rig.engine.send(EngineCommand::StopPlayback);
         }
         assert_eq!(rig.event(), EngineEvent::PlaybackFinished(PlaybackOutcome::StoppedByUser));
-        assert!(matches!(rig.win32(), Win32Command::PlaybackStopped));
+        assert!(matches!(rig.platform(), PlatformCommand::PlaybackStopped));
     }
 }
 
@@ -206,9 +206,9 @@ fn overlay_commands_are_forwarded() {
     let rig = Rig::new();
     let scene = macro_recorder::model::OverlayScene::default();
     rig.engine.send(EngineCommand::ShowOverlay(scene));
-    assert!(matches!(rig.win32(), Win32Command::OverlayShow(_)));
+    assert!(matches!(rig.platform(), PlatformCommand::OverlayShow(_)));
     rig.engine.send(EngineCommand::HideOverlay);
-    assert!(matches!(rig.win32(), Win32Command::OverlayHide));
+    assert!(matches!(rig.platform(), PlatformCommand::OverlayHide));
 }
 
 #[test]

@@ -49,8 +49,14 @@ impl InputInjector for Win32Injector {
         send(&[key_input(VIRTUAL_KEY(0), scancode, flags_for(down, base))])
     }
 
-    fn unicode(&self, utf16: u16, down: bool) -> Result<()> {
-        send(&[key_input(VIRTUAL_KEY(0), utf16, flags_for(down, KEYEVENTF_UNICODE))])
+    fn unicode(&self, ch: char, down: bool) -> Result<()> {
+        let mut units = [0u16; 2];
+        let inputs: Vec<INPUT> = ch
+            .encode_utf16(&mut units)
+            .iter()
+            .map(|unit| key_input(VIRTUAL_KEY(0), *unit, flags_for(down, KEYEVENTF_UNICODE)))
+            .collect();
+        send(&inputs)
     }
 
     fn mouse_move_abs(&self, pos: Point) -> Result<()> {

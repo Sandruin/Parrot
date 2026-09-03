@@ -2,30 +2,29 @@ use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use macro_recorder::model::Rect;
-use macro_recorder::platform::win32::capture::Win32Capture;
-use macro_recorder::platform::win32::dpi;
-use macro_recorder::platform::win32::ocr::Win32Ocr;
-use macro_recorder::platform::{Ocr, ScreenCapture};
+use macro_recorder::platform::native;
 
 const DEFAULT_W: i32 = 800;
 const DEFAULT_H: i32 = 300;
 
-/// Captures a screen region given as `x y w h` and prints what Windows.Media.Ocr reads in it.
+/// Captures a screen region given as `x y w h` and prints what the platform OCR reads in it.
 /// The recognition runs on a worker thread, which is where the engine normally sees it.
 fn main() -> Result<()> {
-    dpi::ensure_per_monitor_v2();
+    native::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
 
-    let capture = Win32Capture;
+    let services = native::services()?;
+    let capture = services.capture;
     let screen = capture.virtual_screen();
     let region = region_from_args(screen);
     println!("virtual screen: {screen:?}");
     println!("region: {region:?}");
 
     let image = capture.capture(region)?;
+    let ocr = services.ocr;
     let worker = std::thread::spawn(move || {
         let started = Instant::now();
-        (Win32Ocr.recognize(&image), started.elapsed())
+        (ocr.recognize(&image), started.elapsed())
     });
     let (lines, elapsed) = worker.join().map_err(|_| anyhow!("OCR thread panicked"))?;
     let lines = lines?;

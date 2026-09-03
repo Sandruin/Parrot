@@ -13,7 +13,7 @@ use crate::model::{Key, MouseButton, PlayerControl, Point, Rect};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InjectedCall {
     Key { key: Key, down: bool },
-    Unicode { utf16: u16, down: bool },
+    Unicode { ch: char, down: bool },
     MoveAbs(Point),
     MoveRel { dx: i32, dy: i32 },
     Button { button: MouseButton, down: bool },
@@ -43,8 +43,8 @@ impl InputInjector for MockInjector {
         self.push(InjectedCall::Key { key, down })
     }
 
-    fn unicode(&self, utf16: u16, down: bool) -> Result<()> {
-        self.push(InjectedCall::Unicode { utf16, down })
+    fn unicode(&self, ch: char, down: bool) -> Result<()> {
+        self.push(InjectedCall::Unicode { ch, down })
     }
 
     fn mouse_move_abs(&self, pos: Point) -> Result<()> {

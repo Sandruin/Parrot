@@ -3,24 +3,22 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use macro_recorder::{engine, model, platform, ui};
+use macro_recorder::platform::{PlatformServices, native};
+use macro_recorder::{engine, model, ui};
 
 fn main() -> Result<()> {
-    #[cfg(windows)]
-    platform::win32::dpi::ensure_per_monitor_v2();
+    native::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let settings = model::AppSettings::load_or_default();
     let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
 
-    #[cfg(not(windows))]
-    compile_error!("only Windows is supported right now");
-    let win32 = platform::win32::spawn_win32_service(raw_tx)?;
-    win32.send(model::Win32Command::SetHotkeys(settings.hotkeys.clone()));
+    let service = native::spawn_service(raw_tx)?;
+    service.send(model::PlatformCommand::SetHotkeys(settings.hotkeys.clone()));
 
-    let capture: Arc<dyn platform::ScreenCapture> = Arc::new(platform::win32::capture::Win32Capture);
-    let windows: Arc<dyn platform::WindowManager> = Arc::new(platform::win32::window::Win32Windows);
-    let services = ui::UiServices { capture: capture.clone(), windows: windows.clone() };
+    let PlatformServices { injector, capture, windows, ocr } = native::services()?;
+    let services =
+        ui::UiServices { injector: injector.clone(), capture: capture.clone(), windows: windows.clone() };
 
     let repaint_ctx: Arc<Mutex<Option<egui::Context>>> = Default::default();
     let repaint_slot = repaint_ctx.clone();
@@ -31,17 +29,17 @@ fn main() -> Result<()> {
     } else {
         engine::spawn_engine(engine::EngineDeps {
             raw_rx,
-            win32_tx: win32.cmd_sender(),
+            platform_tx: service.cmd_sender(),
             repaint: Box::new(move || {
                 if let Some(ctx) = repaint_slot.lock().unwrap().as_ref() {
                     ctx.request_repaint();
                 }
             }),
-            injector: Arc::new(platform::win32::injector::Win32Injector),
+            injector,
             capture,
             windows,
-            sleeper: Arc::new(platform::sleeper::RealSleeper::default()),
-            ocr: Arc::new(platform::win32::ocr::Win32Ocr),
+            sleeper: Arc::new(macro_recorder::platform::sleeper::RealSleeper::default()),
+            ocr,
         })?
     };
 
@@ -68,6 +66,6 @@ fn main() -> Result<()> {
     )
     .map_err(|e| anyhow::anyhow!("eframe: {e}"))?;
 
-    drop(win32);
+    drop(service);
     Ok(())
 }

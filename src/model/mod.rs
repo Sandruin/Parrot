@@ -14,7 +14,7 @@ pub use hotkey::{Hotkey, HotkeyAction, HotkeyConfig, modifiers};
 pub use key_names::{vk, vk_name};
 pub use macro_file::{CURRENT_VERSION, Macro, MacroSettings, MousePathMode, Repeat};
 pub use messages::{
-    EngineCommand, EngineEvent, OverlayScene, OverlayShape, PlaybackOutcome, PlayerControl, RawInputEvent,
-    RecordOptions, Win32Command,
+    EngineCommand, EngineEvent, OverlayScene, OverlayShape, PlatformCommand, PlaybackOutcome, PlayerControl,
+    RawInputEvent, RecordOptions,
 };
 pub use settings::AppSettings;

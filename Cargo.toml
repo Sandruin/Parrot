@@ -2,7 +2,7 @@
 name = "macro-recorder"
 version = "0.1.0"
 edition = "2024"
-description = "Personal macro recorder for Windows: record, edit and replay keyboard and mouse actions"
+description = "Personal macro recorder for Windows and Linux (Wayland): record, edit and replay keyboard and mouse actions"
 license = "MIT"
 
 [dependencies]
@@ -45,6 +45,21 @@ windows = { version = "0.62", features = [
     "Storage_Streams",
     "Globalization",
 ] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-scanner = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-protocols-misc = { version = "0.3", features = ["client"] }
+calloop = "0.14"
+calloop-wayland-source = "0.4"
+evdev = "0.13"
+xkbcommon = { version = "0.9", features = ["wayland"] }
+tesseract = "0.15"
+rustix = { version = "1", features = ["fs", "process"] }
+memmap2 = "0.9"
 
 [build-dependencies]
 embed-manifest = "1.5"

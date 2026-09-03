@@ -69,9 +69,9 @@ impl Default for RecordOptions {
     }
 }
 
-/// Commands from the engine or GUI to the Win32 service thread.
+/// Commands from the engine or GUI to the platform service thread.
 #[derive(Clone, Debug)]
-pub enum Win32Command {
+pub enum PlatformCommand {
     EnableHooks(bool),
     SetHotkeys(HotkeyConfig),
     /// Marks the start of playback so the hooks can trigger auto-stop on foreign input.

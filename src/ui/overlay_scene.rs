@@ -14,11 +14,7 @@ const LABEL_CHARS: usize = 24;
 const ANCHOR_EPSILON: i32 = 2;
 
 /// Shapes that visualize where an action acts on screen; empty for actions without a position.
-pub fn for_action(action: &Action) -> OverlayScene {
-    for_action_from(action, cursor_pos())
-}
-
-/// Same as `for_action`, with the cursor position that relative moves start from passed in.
+/// `cursor` is where the cursor is right now, which is where relative moves start from.
 pub fn for_action_from(action: &Action, cursor: Point) -> OverlayScene {
     let mut shapes = Vec::new();
     match action {
@@ -101,19 +97,6 @@ pub fn cursor_moved(from: Point, to: Point) -> bool {
     (from.x - to.x).abs() >= ANCHOR_EPSILON || (from.y - to.y).abs() >= ANCHOR_EPSILON
 }
 
-/// Where a relative move starts, which is wherever the cursor happens to be right now.
-#[cfg(windows)]
-pub fn cursor_pos() -> Point {
-    use crate::platform::InputInjector as _;
-
-    crate::platform::win32::injector::Win32Injector.cursor_pos().unwrap_or_default()
-}
-
-#[cfg(not(windows))]
-pub fn cursor_pos() -> Point {
-    Point::default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,7 +108,7 @@ mod tests {
 
     #[test]
     fn mouse_move_draws_polyline_start_dot_and_end_crosshair() {
-        let scene = for_action(&path(&[(10, 10), (20, 30), (40, 50)]));
+        let scene = for_action_from(&path(&[(10, 10), (20, 30), (40, 50)]), Point::default());
         assert_eq!(scene.shapes.len(), 3);
         assert!(matches!(&scene.shapes[0], OverlayShape::Polyline { points, .. } if points.len() == 3));
         assert!(
@@ -139,10 +122,10 @@ mod tests {
 
     #[test]
     fn single_point_move_has_no_polyline() {
-        let scene = for_action(&path(&[(7, 8)]));
+        let scene = for_action_from(&path(&[(7, 8)]), Point::default());
         assert_eq!(scene.shapes.len(), 2);
         assert!(!scene.shapes.iter().any(|s| matches!(s, OverlayShape::Polyline { .. })));
-        assert!(for_action(&path(&[])).shapes.is_empty());
+        assert!(for_action_from(&path(&[]), Point::default()).shapes.is_empty());
     }
 
     #[test]
@@ -152,7 +135,7 @@ mod tests {
             event: ButtonEvent::Click,
             pos: Some(Point::new(100, 200)),
         };
-        let scene = for_action(&action);
+        let scene = for_action_from(&action, Point::default());
         assert!(
             matches!(scene.shapes[0], OverlayShape::Crosshair { center, color, .. } if center == Point::new(100, 200) && color == CLICK)
         );
@@ -162,7 +145,10 @@ mod tests {
     #[test]
     fn wheel_and_region_actions() {
         let wheel = Action::MouseWheel { delta: 120, horizontal: false, pos: Some(Point::new(5, 6)) };
-        assert!(matches!(for_action(&wheel).shapes[0], OverlayShape::Crosshair { .. }));
+        assert!(matches!(
+            for_action_from(&wheel, Point::default()).shapes[0],
+            OverlayShape::Crosshair { .. }
+        ));
         let image = Action::WaitForImage {
             region: Rect::new(1, 2, 30, 40),
             template_png: Vec::new(),
@@ -172,7 +158,7 @@ mod tests {
             mode: ImageMatchMode::Exact,
         };
         assert!(
-            matches!(for_action(&image).shapes[0], OverlayShape::Rect { rect, .. } if rect == Rect::new(1, 2, 30, 40))
+            matches!(for_action_from(&image, Point::default()).shapes[0], OverlayShape::Rect { rect, .. } if rect == Rect::new(1, 2, 30, 40))
         );
     }
 
@@ -257,7 +243,7 @@ mod tests {
             Action::MouseWheel { delta: 120, horizontal: true, pos: None },
         ];
         for action in cases {
-            assert!(for_action(&action).shapes.is_empty(), "{action:?}");
+            assert!(for_action_from(&action, Point::default()).shapes.is_empty(), "{action:?}");
         }
     }
 }

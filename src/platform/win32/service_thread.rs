@@ -14,14 +14,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{hooks, hotkeys, overlay, winevent};
-use crate::model::{OverlayScene, RawInputEvent, Win32Command};
+use crate::model::{OverlayScene, PlatformCommand, RawInputEvent};
 
 /// Posted to the service thread so the `GetMessageW` loop wakes up and drains the command channel.
 const WM_DRAIN: u32 = WM_APP + 1;
 
 /// Handle to the Win32 service thread that hosts the hooks, hotkeys and the overlay window.
 pub struct Win32Handle {
-    cmd_tx: Sender<Win32Command>,
+    cmd_tx: Sender<PlatformCommand>,
     thread_id: u32,
     thread: Option<JoinHandle<()>>,
     relay: Option<JoinHandle<()>>,
@@ -29,13 +29,13 @@ pub struct Win32Handle {
 
 impl Win32Handle {
     /// Clone of the command sender for threads that must not own the handle; sends wake the loop too.
-    pub fn cmd_sender(&self) -> Sender<Win32Command> {
+    pub fn cmd_sender(&self) -> Sender<PlatformCommand> {
         self.cmd_tx.clone()
     }
 
-    pub fn send(&self, cmd: Win32Command) {
+    pub fn send(&self, cmd: PlatformCommand) {
         if self.cmd_tx.send(cmd).is_err() {
-            log::warn!("win32 service thread is gone");
+            log::warn!("platform service thread is gone");
             return;
         }
         wake(self.thread_id);
@@ -49,7 +49,7 @@ impl Win32Handle {
 
 impl Drop for Win32Handle {
     fn drop(&mut self) {
-        self.send(Win32Command::Shutdown);
+        self.send(PlatformCommand::Shutdown);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
@@ -61,8 +61,8 @@ impl Drop for Win32Handle {
 
 /// Starts the service thread: low-level hooks, the foreground WinEvent hook, hotkeys and a message loop.
 pub fn spawn_win32_service(raw_tx: Sender<RawInputEvent>) -> Result<Win32Handle> {
-    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<Win32Command>();
-    let (loop_tx, loop_rx) = crossbeam_channel::unbounded::<Win32Command>();
+    let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<PlatformCommand>();
+    let (loop_tx, loop_rx) = crossbeam_channel::unbounded::<PlatformCommand>();
     let (ready_tx, ready_rx) = crossbeam_channel::bounded::<Result<u32, String>>(1);
 
     let thread = std::thread::Builder::new().name("win32".into()).spawn(move || {
@@ -92,7 +92,7 @@ pub fn spawn_win32_service(raw_tx: Sender<RawInputEvent>) -> Result<Win32Handle>
 
     let relay = std::thread::Builder::new().name("win32-wake".into()).spawn(move || {
         while let Ok(cmd) = cmd_rx.recv() {
-            let last = matches!(cmd, Win32Command::Shutdown);
+            let last = matches!(cmd, PlatformCommand::Shutdown);
             if loop_tx.send(cmd).is_err() {
                 break;
             }
@@ -230,7 +230,7 @@ impl Service {
         })
     }
 
-    fn run(&mut self, cmd_rx: &Receiver<Win32Command>) {
+    fn run(&mut self, cmd_rx: &Receiver<PlatformCommand>) {
         let mut msg = MSG::default();
         loop {
             if !self.drain(cmd_rx) {
@@ -264,10 +264,10 @@ impl Service {
     }
 
     /// Handles every queued command; returns false when the service must shut down.
-    fn drain(&mut self, cmd_rx: &Receiver<Win32Command>) -> bool {
+    fn drain(&mut self, cmd_rx: &Receiver<PlatformCommand>) -> bool {
         loop {
             match cmd_rx.try_recv() {
-                Ok(Win32Command::Shutdown) => return false,
+                Ok(PlatformCommand::Shutdown) => return false,
                 Ok(cmd) => self.handle(cmd),
                 Err(crossbeam_channel::TryRecvError::Empty) => return true,
                 Err(crossbeam_channel::TryRecvError::Disconnected) => return false,
@@ -275,31 +275,31 @@ impl Service {
         }
     }
 
-    fn handle(&mut self, cmd: Win32Command) {
+    fn handle(&mut self, cmd: PlatformCommand) {
         let Some(ctx) = hooks::ctx() else { return };
         match cmd {
-            Win32Command::EnableHooks(enabled) => {
+            PlatformCommand::EnableHooks(enabled) => {
                 ctx.set_forward_moves(enabled);
                 self.overlay.set_recording(enabled);
                 self.apply_hotkeys(ctx);
             }
-            Win32Command::SetHotkeys(config) => {
+            PlatformCommand::SetHotkeys(config) => {
                 self.hotkey_config = config;
                 self.apply_hotkeys(ctx);
             }
-            Win32Command::PlaybackStarted(control) => {
+            PlatformCommand::PlaybackStarted(control) => {
                 ctx.arm_playback(control);
                 self.overlay.set_playing(true);
                 self.apply_hotkeys(ctx);
             }
-            Win32Command::PlaybackStopped => {
+            PlatformCommand::PlaybackStopped => {
                 ctx.disarm_playback();
                 self.overlay.set_playing(false);
                 self.apply_hotkeys(ctx);
             }
-            Win32Command::OverlayShow(scene) => self.overlay.show(scene),
-            Win32Command::OverlayHide => self.overlay.hide(),
-            Win32Command::Shutdown => {}
+            PlatformCommand::OverlayShow(scene) => self.overlay.show(scene),
+            PlatformCommand::OverlayHide => self.overlay.hide(),
+            PlatformCommand::Shutdown => {}
         }
     }
 

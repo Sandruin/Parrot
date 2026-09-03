@@ -4,9 +4,8 @@ use anyhow::{Context as _, Result};
 use egui::{Color32, FontId, Pos2, Sense, Stroke, StrokeKind, ViewportBuilder, ViewportId};
 use image::RgbaImage;
 
-use super::{App, style};
+use super::{App, UiServices, style};
 use crate::model::{ActionId, Rect};
-use crate::platform::ScreenCapture;
 
 /// Alpha of the dimming veil over the parts of the screenshot outside the selection.
 const DIM_ALPHA: u8 = 102;
@@ -34,7 +33,7 @@ enum Outcome {
 
 /// Screenshots the monitor under the mouse and arms the picker for the given action.
 pub fn open(app: &mut App, target: ActionId) {
-    match capture_monitor(app.services.capture.as_ref()) {
+    match capture_monitor(&app.services) {
         Ok((monitor, shot)) => {
             app.region_picker = Some(Picker {
                 target,
@@ -219,38 +218,17 @@ fn encode_crop(shot: &RgbaImage, monitor: Rect, region: Rect) -> Result<Vec<u8>>
     Ok(png)
 }
 
-fn capture_monitor(capture: &dyn ScreenCapture) -> Result<(Rect, RgbaImage)> {
-    let monitor = monitor_under_cursor().unwrap_or_else(|| capture.virtual_screen());
-    let shot = capture.capture(monitor).with_context(|| format!("capturing {monitor:?}"))?;
+fn capture_monitor(services: &UiServices) -> Result<(Rect, RgbaImage)> {
+    let monitor = monitor_under_cursor(services);
+    let shot = services.capture.capture(monitor).with_context(|| format!("capturing {monitor:?}"))?;
     Ok((monitor, shot))
 }
 
-/// Bounds of the monitor the mouse cursor sits on, in physical virtual-screen pixels.
-#[cfg(windows)]
-fn monitor_under_cursor() -> Option<Rect> {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-    // SAFETY: both calls write into live locals and take no ownership.
-    unsafe {
-        let mut cursor = POINT::default();
-        GetCursorPos(&mut cursor).ok()?;
-        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
-            return None;
-        }
-        let r = info.rcMonitor;
-        Some(Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top))
-    }
-}
-
-#[cfg(not(windows))]
-fn monitor_under_cursor() -> Option<Rect> {
-    None
+/// Bounds of the monitor the mouse cursor sits on, or the whole virtual screen when none contains it.
+fn monitor_under_cursor(services: &UiServices) -> Rect {
+    let cursor = services.cursor_pos();
+    let monitors = services.capture.monitors();
+    monitors.iter().copied().find(|m| m.contains(cursor)).unwrap_or_else(|| services.capture.virtual_screen())
 }
 
 #[cfg(test)]

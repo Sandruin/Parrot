@@ -11,8 +11,8 @@ use anyhow::Result;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::model::{
-    ActionId, ActionItem, EngineCommand, EngineEvent, HotkeyAction, HotkeyConfig, PlaybackOutcome,
-    PlayerControl, RawInputEvent, Win32Command,
+    ActionId, ActionItem, EngineCommand, EngineEvent, HotkeyAction, HotkeyConfig, PlatformCommand,
+    PlaybackOutcome, PlayerControl, RawInputEvent,
 };
 use crate::platform::{InputInjector, Ocr, ScreenCapture, Sleeper, WindowManager};
 use player::{Player, PlayerDeps};
@@ -55,7 +55,7 @@ impl Drop for EngineHandle {
 /// Everything the engine thread needs from the outside world.
 pub struct EngineDeps {
     pub raw_rx: Receiver<RawInputEvent>,
-    pub win32_tx: Sender<Win32Command>,
+    pub platform_tx: Sender<PlatformCommand>,
     /// Wakes the GUI after an event was sent.
     pub repaint: Box<dyn Fn() + Send + Sync>,
     pub injector: Arc<dyn InputInjector>,
@@ -70,11 +70,11 @@ pub fn spawn_engine(deps: EngineDeps) -> Result<EngineHandle> {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded::<EngineCommand>();
     let (evt_tx, evt_rx) = crossbeam_channel::unbounded::<EngineEvent>();
     let thread = std::thread::Builder::new().name("engine".into()).spawn(move || {
-        let EngineDeps { raw_rx, win32_tx, repaint, injector, capture, windows, sleeper, ocr } = deps;
+        let EngineDeps { raw_rx, platform_tx, repaint, injector, capture, windows, sleeper, ocr } = deps;
         let (done_tx, done_rx) = crossbeam_channel::unbounded::<PlaybackOutcome>();
         let mut engine = Engine {
             evt_tx,
-            win32_tx,
+            platform_tx,
             repaint: Arc::from(repaint),
             player_deps: PlayerDeps { injector, capture, windows, sleeper, ocr },
             state: State::Idle,
@@ -95,7 +95,7 @@ enum State {
 
 struct Engine {
     evt_tx: Sender<EngineEvent>,
-    win32_tx: Sender<Win32Command>,
+    platform_tx: Sender<PlatformCommand>,
     repaint: Arc<dyn Fn() + Send + Sync>,
     player_deps: PlayerDeps,
     state: State,
@@ -142,7 +142,7 @@ impl Engine {
                     self.emit(EngineEvent::Error("cannot record while busy".into()));
                     return true;
                 }
-                self.to_win32(Win32Command::EnableHooks(true));
+                self.to_platform(PlatformCommand::EnableHooks(true));
                 self.state = State::Recording(Recorder::new(opts, self.chord_vks.clone()));
                 self.emit(EngineEvent::RecordingStarted);
             }
@@ -156,7 +156,7 @@ impl Engine {
                     let item = ActionItem::new(self.take_id(), action);
                     self.emit(EngineEvent::Recorded(item));
                 }
-                self.to_win32(Win32Command::EnableHooks(false));
+                self.to_platform(PlatformCommand::EnableHooks(false));
                 self.emit(EngineEvent::RecordingStopped);
             }
             EngineCommand::Play { macro_, start_index } => {
@@ -166,7 +166,7 @@ impl Engine {
                 }
                 let ctl = PlayerControl::new();
                 if macro_.settings.stop_on_user_input {
-                    self.to_win32(Win32Command::PlaybackStarted(ctl.clone()));
+                    self.to_platform(PlatformCommand::PlaybackStarted(ctl.clone()));
                 }
                 self.emit(EngineEvent::PlaybackStarted { total: macro_.items.len() });
                 let evt_tx = self.evt_tx.clone();
@@ -188,7 +188,7 @@ impl Engine {
                 match spawned {
                     Ok(thread) => self.state = State::Playing { ctl, thread },
                     Err(e) => {
-                        self.to_win32(Win32Command::PlaybackStopped);
+                        self.to_platform(PlatformCommand::PlaybackStopped);
                         self.emit(EngineEvent::PlaybackFinished(PlaybackOutcome::Failed {
                             index: start_index,
                             error: format!("cannot start the playback thread: {e}"),
@@ -203,10 +203,10 @@ impl Engine {
             }
             EngineCommand::SetHotkeys(cfg) => {
                 self.chord_vks = cfg.chord_vks();
-                self.to_win32(Win32Command::SetHotkeys(cfg));
+                self.to_platform(PlatformCommand::SetHotkeys(cfg));
             }
-            EngineCommand::ShowOverlay(scene) => self.to_win32(Win32Command::OverlayShow(scene)),
-            EngineCommand::HideOverlay => self.to_win32(Win32Command::OverlayHide),
+            EngineCommand::ShowOverlay(scene) => self.to_platform(PlatformCommand::OverlayShow(scene)),
+            EngineCommand::HideOverlay => self.to_platform(PlatformCommand::OverlayHide),
             EngineCommand::Shutdown => return false,
         }
         true
@@ -236,7 +236,7 @@ impl Engine {
         if let State::Playing { thread, .. } = std::mem::replace(&mut self.state, State::Idle) {
             let _ = thread.join();
         }
-        self.to_win32(Win32Command::PlaybackStopped);
+        self.to_platform(PlatformCommand::PlaybackStopped);
         self.emit(EngineEvent::PlaybackFinished(outcome));
     }
 
@@ -245,9 +245,9 @@ impl Engine {
             State::Playing { ctl, thread } => {
                 ctl.request_stop();
                 let _ = thread.join();
-                self.to_win32(Win32Command::PlaybackStopped);
+                self.to_platform(PlatformCommand::PlaybackStopped);
             }
-            State::Recording(_) => self.to_win32(Win32Command::EnableHooks(false)),
+            State::Recording(_) => self.to_platform(PlatformCommand::EnableHooks(false)),
             State::Idle => {}
         }
     }
@@ -264,9 +264,9 @@ impl Engine {
         (self.repaint)();
     }
 
-    fn to_win32(&self, cmd: Win32Command) {
-        if self.win32_tx.send(cmd).is_err() {
-            log::warn!("win32 service thread is gone");
+    fn to_platform(&self, cmd: PlatformCommand) {
+        if self.platform_tx.send(cmd).is_err() {
+            log::warn!("platform service thread is gone");
         }
     }
 }

@@ -1,9 +1,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use macro_recorder::model::{OverlayScene, OverlayShape, Point, Rect, Win32Command};
-use macro_recorder::platform::InputInjector;
-use macro_recorder::platform::win32;
+use macro_recorder::model::{OverlayScene, OverlayShape, PlatformCommand, Point, Rect};
+use macro_recorder::platform::native;
 
 const SHOWN: Duration = Duration::from_secs(4);
 
@@ -13,19 +12,19 @@ const PATH: [u8; 4] = [96, 165, 250, 220];
 const CLICK: [u8; 4] = [239, 68, 68, 220];
 
 fn main() -> Result<()> {
-    win32::dpi::ensure_per_monitor_v2();
+    native::init();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let (raw_tx, _raw_rx) = crossbeam_channel::unbounded();
-    let service = win32::spawn_win32_service(raw_tx)?;
+    let service = native::spawn_service(raw_tx)?;
 
-    let cursor = win32::injector::Win32Injector.cursor_pos()?;
+    let cursor = native::services()?.injector.cursor_pos()?;
     println!("drawing the overlay around {}, {} for {SHOWN:?}", cursor.x, cursor.y);
-    service.send(Win32Command::OverlayShow(demo_scene(cursor)));
+    service.send(PlatformCommand::OverlayShow(demo_scene(cursor)));
 
     std::thread::sleep(SHOWN);
     println!("hiding the overlay");
-    service.send(Win32Command::OverlayHide);
+    service.send(PlatformCommand::OverlayHide);
     std::thread::sleep(Duration::from_millis(300));
     Ok(())
 }

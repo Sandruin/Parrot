@@ -394,12 +394,8 @@ impl Player {
     }
 
     fn type_unicode(&self, ch: char) -> Result<()> {
-        let mut buf = [0u16; 2];
-        for unit in ch.encode_utf16(&mut buf) {
-            self.deps.injector.unicode(*unit, true)?;
-            self.deps.injector.unicode(*unit, false)?;
-        }
-        Ok(())
+        self.deps.injector.unicode(ch, true)?;
+        self.deps.injector.unicode(ch, false)
     }
 
     fn type_chord(&mut self, chord: CharKey) -> Result<()> {

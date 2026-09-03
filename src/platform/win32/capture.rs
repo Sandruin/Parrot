@@ -2,10 +2,13 @@ use std::ffi::c_void;
 
 use anyhow::{Result, bail};
 use image::RgbaImage;
+use windows::Win32::Foundation::{LPARAM, RECT, TRUE};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleBitmap, CreateCompatibleDC,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, HDC, ReleaseDC, SRCCOPY, SelectObject,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GetDC, GetDIBits, HDC, HMONITOR, ReleaseDC,
+    SRCCOPY, SelectObject,
 };
+use windows::core::BOOL;
 
 use super::injector::virtual_screen;
 use crate::model::Rect;
@@ -18,6 +21,18 @@ pub struct Win32Capture;
 impl ScreenCapture for Win32Capture {
     fn virtual_screen(&self) -> Rect {
         virtual_screen()
+    }
+
+    fn monitors(&self) -> Vec<Rect> {
+        let mut out: Vec<Rect> = Vec::new();
+        // SAFETY: the callback only pushes into the Vec we pass by pointer, which outlives the call.
+        let _ = unsafe {
+            EnumDisplayMonitors(None, None, Some(monitor_proc), LPARAM(&mut out as *mut Vec<Rect> as isize))
+        };
+        if out.is_empty() {
+            out.push(virtual_screen());
+        }
+        out
     }
 
     fn capture(&self, region: Rect) -> Result<RgbaImage> {
@@ -34,6 +49,21 @@ impl ScreenCapture for Win32Capture {
         unsafe { ReleaseDC(None, screen) };
         result
     }
+}
+
+unsafe extern "system" fn monitor_proc(
+    _monitor: HMONITOR,
+    _dc: HDC,
+    rect: *mut RECT,
+    lparam: LPARAM,
+) -> BOOL {
+    // SAFETY: `monitors` passes a pointer to a live Vec and the system passes a valid monitor rectangle.
+    unsafe {
+        let out = &mut *(lparam.0 as *mut Vec<Rect>);
+        let r = *rect;
+        out.push(Rect::new(r.left, r.top, r.right - r.left, r.bottom - r.top));
+    }
+    TRUE
 }
 
 fn blit(screen: HDC, region: Rect) -> Result<RgbaImage> {

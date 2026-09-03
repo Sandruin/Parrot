@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -29,8 +30,8 @@ pub struct CharKey {
 /// Sends synthetic input; every call is tagged so the hooks can recognise it as our own.
 pub trait InputInjector: Send + Sync {
     fn key(&self, key: Key, down: bool) -> Result<()>;
-    /// Sends one UTF-16 code unit as a Unicode key event.
-    fn unicode(&self, utf16: u16, down: bool) -> Result<()>;
+    /// Sends a character as a Unicode key event, independent of the keyboard layout.
+    fn unicode(&self, ch: char, down: bool) -> Result<()>;
     fn mouse_move_abs(&self, pos: Point) -> Result<()>;
     /// Moves the cursor by a raw delta, which is what games reading raw input expect.
     fn mouse_move_rel(&self, dx: i32, dy: i32) -> Result<()>;
@@ -47,6 +48,10 @@ pub trait InputInjector: Send + Sync {
 pub trait ScreenCapture: Send + Sync {
     /// Bounding rectangle of all monitors in physical pixels.
     fn virtual_screen(&self) -> Rect;
+    /// Bounds of every monitor in physical pixels; defaults to the whole virtual screen.
+    fn monitors(&self) -> Vec<Rect> {
+        vec![self.virtual_screen()]
+    }
     fn capture(&self, region: Rect) -> Result<RgbaImage>;
 }
 
@@ -73,6 +78,15 @@ pub struct OcrLine {
 
 pub trait Ocr: Send + Sync {
     fn recognize(&self, image: &RgbaImage) -> Result<Vec<OcrLine>>;
+}
+
+/// The platform implementations the engine and the GUI share.
+#[derive(Clone)]
+pub struct PlatformServices {
+    pub injector: Arc<dyn InputInjector>,
+    pub capture: Arc<dyn ScreenCapture>,
+    pub windows: Arc<dyn WindowManager>,
+    pub ocr: Arc<dyn Ocr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

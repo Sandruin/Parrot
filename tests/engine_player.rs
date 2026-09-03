@@ -142,10 +142,10 @@ fn injected_call_order_for_a_small_macro() {
             InjectedCall::Key { key: key(0x41), down: true },
             InjectedCall::Key { key: key(0x41), down: false },
             InjectedCall::Wheel { delta: -120, horizontal: false },
-            InjectedCall::Unicode { utf16: b'h' as u16, down: true },
-            InjectedCall::Unicode { utf16: b'h' as u16, down: false },
-            InjectedCall::Unicode { utf16: b'i' as u16, down: true },
-            InjectedCall::Unicode { utf16: b'i' as u16, down: false },
+            InjectedCall::Unicode { ch: 'h', down: true },
+            InjectedCall::Unicode { ch: 'h', down: false },
+            InjectedCall::Unicode { ch: 'i', down: true },
+            InjectedCall::Unicode { ch: 'i', down: false },
         ]
     );
     assert_eq!(h.sleeper.total_slept(), Duration::from_millis(30 + 30 + 50 + 5));
@@ -738,8 +738,8 @@ impl InputInjector for LayoutInjector {
         self.inner.key(k, down)
     }
 
-    fn unicode(&self, utf16: u16, down: bool) -> Result<()> {
-        self.inner.unicode(utf16, down)
+    fn unicode(&self, ch: char, down: bool) -> Result<()> {
+        self.inner.unicode(ch, down)
     }
 
     fn mouse_move_abs(&self, pos: Point) -> Result<()> {
@@ -799,8 +799,8 @@ fn scan_code_typing_holds_modifiers_and_falls_back_to_unicode() {
             InjectedCall::Key { key: a, down: true },
             InjectedCall::Key { key: a, down: false },
             InjectedCall::Key { key: shift, down: false },
-            InjectedCall::Unicode { utf16: b'?' as u16, down: true },
-            InjectedCall::Unicode { utf16: b'?' as u16, down: false },
+            InjectedCall::Unicode { ch: '?', down: true },
+            InjectedCall::Unicode { ch: '?', down: false },
         ]
     );
 }
