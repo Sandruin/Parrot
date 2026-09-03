@@ -169,6 +169,12 @@ fn mouse_items(app: &mut App, ui: &mut egui::Ui) {
     if ui.button("Move").clicked() {
         app.add_action(Action::MouseMove { path: vec![PathPoint::default()] });
     }
+    if ui.button("Move (relative)").on_hover_text("Cursor deltas for games that read raw input").clicked() {
+        app.add_action(Action::MouseMoveRelative {
+            steps: vec![PathPoint { x: 100, y: 0, dt_ms: 0 }],
+            scale: 1.0,
+        });
+    }
     if ui.button("Wheel").clicked() {
         app.add_action(Action::MouseWheel { delta: -120, horizontal: false, pos: None });
     }
@@ -200,6 +206,30 @@ fn image_items(app: &mut App, ui: &mut egui::Ui) {
             mode: ImageMatchMode::Search,
         });
     }
+    if ui.button("Wait for text").clicked() {
+        app.add_action(Action::WaitForText {
+            region: text_region(),
+            text: String::new(),
+            case_sensitive: false,
+            poll_ms: 500,
+            timeout_ms: 10_000,
+        });
+    }
+    if ui.button("Click on text").clicked() {
+        app.add_action(Action::ClickOnText {
+            region: text_region(),
+            text: String::new(),
+            case_sensitive: false,
+            button: MouseButton::Left,
+            poll_ms: 500,
+            timeout_ms: 10_000,
+        });
+    }
+}
+
+/// Default search region for the OCR actions, a band near the top left of the screen.
+fn text_region() -> Rect {
+    Rect::new(0, 0, 400, 200)
 }
 
 fn misc_items(app: &mut App, ui: &mut egui::Ui) {
@@ -209,6 +239,9 @@ fn misc_items(app: &mut App, ui: &mut egui::Ui) {
             process_name: String::new(),
             timeout_ms: 5_000,
         });
+    }
+    if ui.button("Wait for file").clicked() {
+        app.add_action(Action::WaitForFile { path: String::new(), timeout_ms: 60_000 });
     }
     if ui.button("Comment").clicked() {
         app.add_action(Action::Comment { text: String::new() });

@@ -2,6 +2,7 @@ pub mod matcher;
 pub mod player;
 pub mod recorder;
 pub mod scheduler;
+pub mod text_match;
 
 use std::sync::Arc;
 use std::thread::JoinHandle;

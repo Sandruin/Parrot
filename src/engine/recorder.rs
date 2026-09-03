@@ -20,6 +20,7 @@ pub struct Recorder {
     pending: Option<Pending>,
     open_path: Option<OpenPath>,
     last_emit: Option<Instant>,
+    last_cursor: Option<Point>,
 }
 
 /// A down event held back until it is clear whether a matching up follows in time.
@@ -33,15 +34,18 @@ struct OpenPath {
     start: Instant,
     last_pos: Point,
     last_at: Instant,
+    /// Cursor position before the path started, the reference for the first relative step.
+    origin: Option<Point>,
 }
 
 impl OpenPath {
-    fn new(pos: Point, at: Instant) -> Self {
+    fn new(pos: Point, at: Instant, origin: Option<Point>) -> Self {
         Self {
             points: vec![PathPoint { x: pos.x, y: pos.y, dt_ms: 0 }],
             start: at,
             last_pos: pos,
             last_at: at,
+            origin,
         }
     }
 }
@@ -55,7 +59,7 @@ enum MoveStep {
 
 impl Recorder {
     pub fn new(opts: RecordOptions, chord_vks: Vec<u16>) -> Self {
-        Self { opts, chord_vks, pending: None, open_path: None, last_emit: None }
+        Self { opts, chord_vks, pending: None, open_path: None, last_emit: None, last_cursor: None }
     }
 
     pub fn options(&self) -> &RecordOptions {
@@ -82,6 +86,7 @@ impl Recorder {
             }
             RawInputEvent::Button { button, down, pos, at, .. } => {
                 self.on_button(button, down, pos, at, &mut out);
+                self.last_cursor = Some(pos);
             }
             RawInputEvent::Wheel { delta, horizontal, pos, at, .. } => {
                 self.flush_pending(&mut out);
@@ -110,6 +115,7 @@ impl Recorder {
         self.flush_pending(&mut out);
         self.flush_path(&mut out);
         self.last_emit = None;
+        self.last_cursor = None;
         out
     }
 
@@ -187,6 +193,8 @@ impl Recorder {
     }
 
     fn sample(&mut self, pos: Point, at: Instant, out: &mut Vec<Action>) {
+        let origin = self.last_cursor;
+        self.last_cursor = Some(pos);
         let step = match self.open_path.as_mut() {
             None => MoveStep::Start,
             Some(path) if at.saturating_duration_since(path.last_at) > PATH_GAP => MoveStep::Restart,
@@ -209,10 +217,10 @@ impl Recorder {
                     self.flush_path(out);
                 }
             }
-            MoveStep::Start => self.open_path = Some(OpenPath::new(pos, at)),
+            MoveStep::Start => self.open_path = Some(OpenPath::new(pos, at, origin)),
             MoveStep::Restart => {
                 self.flush_path(out);
-                self.open_path = Some(OpenPath::new(pos, at));
+                self.open_path = Some(OpenPath::new(pos, at, origin));
             }
         }
     }
@@ -236,9 +244,19 @@ impl Recorder {
     }
 
     fn flush_path(&mut self, out: &mut Vec<Action>) {
-        if let Some(path) = self.open_path.take() {
-            self.emit(out, path.start, path.last_at, Action::MouseMove { path: path.points });
-        }
+        let Some(path) = self.open_path.take() else {
+            return;
+        };
+        let action = if self.opts.relative_mouse_moves {
+            let steps = relative_steps(&path.points, path.origin);
+            if steps.is_empty() {
+                return;
+            }
+            Action::MouseMoveRelative { steps, scale: 1.0 }
+        } else {
+            Action::MouseMove { path: path.points }
+        };
+        self.emit(out, path.start, path.last_at, action);
     }
 
     fn emit(&mut self, out: &mut Vec<Action>, start: Instant, end: Instant, action: Action) {
@@ -251,6 +269,19 @@ impl Recorder {
         out.push(action);
         self.last_emit = Some(end.max(start));
     }
+}
+
+/// Turns absolute samples into per-step deltas; the first step is dropped without a known `origin`.
+fn relative_steps(points: &[PathPoint], origin: Option<Point>) -> Vec<PathPoint> {
+    let mut steps = Vec::with_capacity(points.len());
+    let mut previous = origin;
+    for point in points {
+        if let Some(previous) = previous {
+            steps.push(PathPoint { x: point.x - previous.x, y: point.y - previous.y, dt_ms: point.dt_ms });
+        }
+        previous = Some(point.pos());
+    }
+    steps
 }
 
 fn dist_sq(a: Point, b: Point) -> i64 {
@@ -640,5 +671,110 @@ mod tests {
         let mut s = stream();
         s.key(A, true, 0);
         assert_eq!(s.finish(), vec![Action::KeyDown { key: key_of(A) }]);
+    }
+
+    fn relative_stream() -> Stream {
+        Stream::new(RecordOptions { relative_mouse_moves: true, ..Default::default() })
+    }
+
+    fn relative_steps_of(actions: &[Action]) -> Vec<Vec<PathPoint>> {
+        actions
+            .iter()
+            .filter_map(|a| match a {
+                Action::MouseMoveRelative { steps, .. } => Some(steps.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn relative_mode_records_deltas_between_samples() {
+        let mut s = relative_stream();
+        let out = s.mv(100, 100, 0).mv(110, 105, 20).mv(115, 105, 40).finish();
+        assert_eq!(
+            out,
+            vec![Action::MouseMoveRelative {
+                steps: vec![PathPoint { x: 10, y: 5, dt_ms: 20 }, PathPoint { x: 5, y: 0, dt_ms: 20 },],
+                scale: 1.0,
+            }]
+        );
+    }
+
+    #[test]
+    fn the_first_relative_step_comes_from_the_last_seen_cursor_position() {
+        let mut s = relative_stream();
+        let out = s
+            .button(true, 100, 100, 0)
+            .button(false, 100, 100, 50)
+            .mv(110, 100, 200)
+            .mv(120, 90, 220)
+            .finish();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1], wait(150.0, TimeUnit::Ms));
+        assert_eq!(
+            relative_steps_of(&out),
+            vec![vec![PathPoint { x: 10, y: 0, dt_ms: 0 }, PathPoint { x: 10, y: -10, dt_ms: 20 }]]
+        );
+    }
+
+    #[test]
+    fn a_relative_path_without_a_previous_position_drops_its_first_step() {
+        let mut s = relative_stream();
+        let out = s.mv(50, 50, 0).key(A, true, 100).key(A, false, 110).finish();
+        assert_eq!(out, vec![press(A)]);
+    }
+
+    #[test]
+    fn relative_paths_keep_gap_splitting_and_downsampling() {
+        let mut s = relative_stream();
+        let out = s.mv(0, 0, 0).mv(1, 0, 3).mv(5, 0, 6).mv(6, 0, 20).mv(20, 0, 1_300).finish();
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[1], wait(1_280.0, TimeUnit::Ms));
+        assert_eq!(
+            relative_steps_of(&out),
+            vec![
+                vec![PathPoint { x: 5, y: 0, dt_ms: 6 }, PathPoint { x: 1, y: 0, dt_ms: 14 }],
+                vec![PathPoint { x: 14, y: 0, dt_ms: 0 }],
+            ]
+        );
+    }
+
+    #[test]
+    fn relative_paths_are_capped_like_absolute_ones() {
+        let mut s = relative_stream();
+        for i in 0..6_000u64 {
+            s.mv(i as i32 * 5, 0, i * 10);
+        }
+        let out = s.finish();
+        let lengths: Vec<usize> = relative_steps_of(&out).iter().map(Vec::len).collect();
+        assert_eq!(lengths, vec![4_999, 1_000]);
+    }
+
+    #[test]
+    fn relative_mode_keeps_click_folding_and_drags() {
+        let mut s = relative_stream();
+        let out = s.button(true, 100, 100, 0).mv(101, 100, 10).button(false, 101, 101, 20).finish();
+        assert_eq!(out.len(), 1);
+        assert!(matches!(out[0], Action::MouseButton { event: ButtonEvent::Click, .. }));
+
+        let mut s = relative_stream();
+        let out = s.button(true, 100, 100, 0).mv(150, 150, 10).button(false, 150, 150, 200).finish();
+        assert_eq!(
+            out,
+            vec![
+                Action::MouseButton {
+                    button: MouseButton::Left,
+                    event: ButtonEvent::Down,
+                    pos: Some(Point::new(100, 100)),
+                },
+                Action::MouseMoveRelative { steps: vec![PathPoint { x: 50, y: 50, dt_ms: 0 }], scale: 1.0 },
+                wait(190.0, TimeUnit::Ms),
+                Action::MouseButton {
+                    button: MouseButton::Left,
+                    event: ButtonEvent::Up,
+                    pos: Some(Point::new(150, 150)),
+                },
+            ]
+        );
     }
 }

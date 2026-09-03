@@ -5,11 +5,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use image::RgbaImage;
 
-use crate::engine::matcher;
 use crate::engine::scheduler::Scheduler;
+use crate::engine::{matcher, text_match};
 use crate::model::{
     Action, ButtonEvent, ImageMatchMode, Key, Macro, MacroSettings, MouseButton, MousePathMode,
-    PlaybackOutcome, PlayerControl, Rect, Repeat, TextMode, vk,
+    PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMode, vk,
 };
 use crate::platform::{CharKey, InputInjector, Ocr, ScreenCapture, Sleeper, WaitResult, WindowManager};
 
@@ -17,6 +17,9 @@ use crate::platform::{CharKey, InputInjector, Ocr, ScreenCapture, Sleeper, WaitR
 pub type ProgressFn = Box<dyn FnMut(usize, u32) + Send>;
 
 const CLICK_HOLD_MS: f64 = 30.0;
+const FILE_POLL_MS: f64 = 250.0;
+/// Longest recognised text quoted in a `WaitForText` timeout error.
+const READ_TEXT_LIMIT: usize = 200;
 
 /// Everything a playback needs from the platform layer.
 #[derive(Clone)]
@@ -50,6 +53,15 @@ struct ImageWait {
     poll_ms: u32,
     timeout_ms: u32,
     mode: ImageMatchMode,
+}
+
+/// What `WaitForText` and `ClickOnText` search for, shared by both.
+struct TextWait<'a> {
+    region: Rect,
+    text: &'a str,
+    case_sensitive: bool,
+    poll_ms: u32,
+    timeout_ms: u32,
 }
 
 impl Player {
@@ -217,10 +229,61 @@ impl Player {
                 };
                 return self.wait_for_image(&spec, &template, sched);
             }
-            Action::WaitForText { .. } => bail!("wait for text is not supported yet"),
-            Action::ClickOnText { .. } => bail!("click on text is not supported yet"),
-            Action::MouseMoveRelative { .. } => bail!("relative mouse moves are not supported yet"),
-            Action::WaitForFile { .. } => bail!("wait for file is not supported yet"),
+            Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms } => {
+                let spec = TextWait {
+                    region: *region,
+                    text,
+                    case_sensitive: *case_sensitive,
+                    poll_ms: *poll_ms,
+                    timeout_ms: *timeout_ms,
+                };
+                if self.wait_for_text(&spec, sched)?.is_none() {
+                    return Ok(Flow::Stopped);
+                }
+            }
+            Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms } => {
+                let spec = TextWait {
+                    region: *region,
+                    text,
+                    case_sensitive: *case_sensitive,
+                    poll_ms: *poll_ms,
+                    timeout_ms: *timeout_ms,
+                };
+                let Some(found) = self.wait_for_text(&spec, sched)? else {
+                    return Ok(Flow::Stopped);
+                };
+                let target = Point::new(region.x + found.x + found.w / 2, region.y + found.y + found.h / 2);
+                self.deps.injector.mouse_move_abs(target)?;
+                self.button(*button, true)?;
+                if let Flow::Stopped = self.wait(CLICK_HOLD_MS, sched) {
+                    return Ok(Flow::Stopped);
+                }
+                self.button(*button, false)?;
+            }
+            Action::MouseMoveRelative { steps, scale } => {
+                let scale = *scale as f64;
+                let mut carry_x = 0.0;
+                let mut carry_y = 0.0;
+                for (i, step) in steps.iter().enumerate() {
+                    if i > 0
+                        && let Flow::Stopped = self.wait(step.dt_ms as f64, sched)
+                    {
+                        return Ok(Flow::Stopped);
+                    }
+                    carry_x += step.x as f64 * scale;
+                    carry_y += step.y as f64 * scale;
+                    let dx = carry_x.round();
+                    let dy = carry_y.round();
+                    carry_x -= dx;
+                    carry_y -= dy;
+                    if dx != 0.0 || dy != 0.0 {
+                        self.deps.injector.mouse_move_rel(dx as i32, dy as i32)?;
+                    }
+                }
+            }
+            Action::WaitForFile { path, timeout_ms } => {
+                return self.wait_for_file(path, *timeout_ms, sched);
+            }
             Action::Comment { .. } | Action::Label { .. } => {}
         }
         Ok(Flow::Continue)
@@ -257,6 +320,58 @@ impl Player {
                 );
             }
             if let Flow::Stopped = self.wait(poll_ms.max(1) as f64, sched) {
+                return Ok(Flow::Stopped);
+            }
+        }
+    }
+
+    /// Polls the region until the text is read; `None` means the playback was stopped while waiting.
+    fn wait_for_text(&mut self, spec: &TextWait, sched: &mut Scheduler) -> Result<Option<Rect>> {
+        sched.resync();
+        let start = sched.now();
+        let timeout = Duration::from_millis(spec.timeout_ms as u64);
+        loop {
+            if self.ctl.is_stopped() {
+                return Ok(None);
+            }
+            let shot = self.deps.capture.capture(spec.region).context("capturing region")?;
+            let lines = self.deps.ocr.recognize(&shot).context("reading text")?;
+            if let Some(found) = text_match::find_text(&lines, spec.text, spec.case_sensitive) {
+                sched.resync();
+                return Ok(Some(found));
+            }
+            if spec.timeout_ms > 0 && sched.now().saturating_duration_since(start) >= timeout {
+                let read = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join(" | ");
+                bail!(
+                    "text {:?} not found within {} ms, last read {:?}",
+                    spec.text,
+                    spec.timeout_ms,
+                    truncate(&read, READ_TEXT_LIMIT)
+                );
+            }
+            if let Flow::Stopped = self.wait(spec.poll_ms.max(1) as f64, sched) {
+                return Ok(None);
+            }
+        }
+    }
+
+    fn wait_for_file(&mut self, path: &str, timeout_ms: u32, sched: &mut Scheduler) -> Result<Flow> {
+        sched.resync();
+        let start = sched.now();
+        let timeout = Duration::from_millis(timeout_ms as u64);
+        let target = std::path::Path::new(path);
+        loop {
+            if self.ctl.is_stopped() {
+                return Ok(Flow::Stopped);
+            }
+            if target.exists() {
+                sched.resync();
+                return Ok(Flow::Continue);
+            }
+            if timeout_ms > 0 && sched.now().saturating_duration_since(start) >= timeout {
+                bail!("file {path:?} did not appear within {timeout_ms} ms");
+            }
+            if let Flow::Stopped = self.wait(FILE_POLL_MS, sched) {
                 return Ok(Flow::Stopped);
             }
         }
@@ -328,4 +443,13 @@ impl Player {
             let _ = self.deps.injector.key(key, false);
         }
     }
+}
+
+/// Shortens `text` to `max_chars` characters, marking the cut with an ellipsis.
+fn truncate(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{kept}...")
 }

@@ -115,6 +115,11 @@ fn arc_path() -> Vec<PathPoint> {
         .collect()
 }
 
+/// Relative steps of a slow camera pan, the shape a raw-input recording has.
+fn turn_steps() -> Vec<PathPoint> {
+    (0..12).map(|i| PathPoint { x: 14 - i / 3, y: if i % 4 == 0 { -3 } else { 0 }, dt_ms: 8 }).collect()
+}
+
 /// Macro with one item of every kind, loaded when `MACRO_DEMO_DOC` is set.
 pub fn demo_doc() -> Macro {
     let key = Key { vk: 0x41, scancode: 0x1E, extended: false };
@@ -151,6 +156,7 @@ pub fn demo_doc() -> Macro {
             "click the target",
         ),
         (Action::MouseWheel { delta: -360, horizontal: false, pos: Some(Point::new(960, 540)) }, ""),
+        (Action::MouseMoveRelative { steps: turn_steps(), scale: 1.5 }, "turn the camera with raw deltas"),
         (
             Action::WaitForImage {
                 region: Rect::new(820, 460, 320, 200),
@@ -171,6 +177,17 @@ pub fn demo_doc() -> Macro {
                 timeout_ms: 8_000,
             },
             "",
+        ),
+        (
+            Action::ClickOnText {
+                region: Rect::new(760, 620, 400, 120),
+                text: "Continue".into(),
+                case_sensitive: false,
+                button: MouseButton::Left,
+                poll_ms: 500,
+                timeout_ms: 10_000,
+            },
+            "click the button by its caption",
         ),
         (Action::WaitForFile { path: "C:/out/render.png".into(), timeout_ms: 60_000 }, ""),
         (Action::Comment { text: "loop ends here".into() }, ""),

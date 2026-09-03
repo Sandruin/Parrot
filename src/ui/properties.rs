@@ -51,19 +51,25 @@ impl Dialog {
         }
     }
 
-    /// Stores a freshly picked region and template; returns false when the dialog moved on.
+    /// Stores a freshly picked region, plus the template for actions that match on pixels.
     pub fn apply_region(&mut self, target: ActionId, picked: Rect, png: Vec<u8>) -> bool {
         if self.id != target {
             return false;
         }
-        let Action::WaitForImage { region, template_png, mode, .. } = &mut self.action else {
-            return false;
-        };
-        *region = picked;
-        *template_png = png;
-        *mode = ImageMatchMode::Exact;
-        self.preview = None;
-        true
+        match &mut self.action {
+            Action::WaitForImage { region, template_png, mode, .. } => {
+                *region = picked;
+                *template_png = png;
+                *mode = ImageMatchMode::Exact;
+                self.preview = None;
+                true
+            }
+            Action::WaitForText { region, .. } | Action::ClickOnText { region, .. } => {
+                *region = picked;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -227,7 +233,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             });
         }
         Action::WaitForImage { region, template_png, similarity, poll_ms, timeout_ms, mode } => {
-            region_rows(ui, region, Some(request_region));
+            region_rows(ui, region, request_region);
             row(ui, "Similarity", |ui| {
                 ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
             });
@@ -243,7 +249,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
         }
         Action::WaitForText { region, text, case_sensitive, poll_ms, timeout_ms } => {
-            region_rows(ui, region, None);
+            region_rows(ui, region, request_region);
             row(ui, "Text", |ui| {
                 ui.add(TextEdit::singleline(text).desired_width(280.0));
             });
@@ -253,14 +259,32 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             millis(ui, "Poll every", poll_ms);
             millis(ui, "Timeout", timeout_ms);
         }
-        Action::MouseMoveRelative { .. } | Action::ClickOnText { .. } => {
-            row(ui, "", |ui| {
-                ui.weak("Editor not available yet");
+        Action::ClickOnText { region, text, case_sensitive, button, poll_ms, timeout_ms } => {
+            region_rows(ui, region, request_region);
+            row(ui, "Text", |ui| {
+                ui.add(TextEdit::singleline(text).hint_text("Sign in").desired_width(280.0));
             });
+            row(ui, "Case", |ui| {
+                ui.checkbox(case_sensitive, "Case sensitive");
+            });
+            row(ui, "Button", |ui| {
+                combo(ui, "click_text_button", button, &MouseButton::ALL, |b| b.label().to_string());
+            });
+            millis(ui, "Poll every", poll_ms);
+            millis(ui, "Timeout", timeout_ms);
         }
+        Action::MouseMoveRelative { steps, scale } => relative_rows(ui, steps, scale),
         Action::WaitForFile { path, timeout_ms } => {
             row(ui, "Path", |ui| {
-                ui.add(TextEdit::singleline(path).desired_width(280.0));
+                ui.add(TextEdit::singleline(path).hint_text("C:/out/render.png").desired_width(214.0));
+                if ui
+                    .add(Button::new("Browse..."))
+                    .on_hover_text("Pick the file playback should wait for")
+                    .clicked()
+                    && let Some(picked) = rfd::FileDialog::new().set_title("File to wait for").pick_file()
+                {
+                    *path = picked.display().to_string();
+                }
             });
             millis(ui, "Timeout", timeout_ms);
         }
@@ -314,28 +338,61 @@ fn position(ui: &mut egui::Ui, pos: &mut Option<Point>) {
     *pos = if at_cursor { None } else { Some(point) };
 }
 
-fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: Option<&mut bool>) {
+fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: &mut bool) {
     row(ui, "Region", |ui| {
         ui.add(DragValue::new(&mut region.x).prefix("x "));
         ui.add(DragValue::new(&mut region.y).prefix("y "));
         ui.add(DragValue::new(&mut region.w).range(1..=32_768).prefix("w "));
         ui.add(DragValue::new(&mut region.h).range(1..=32_768).prefix("h "));
     });
-    row(ui, "", |ui| match request {
-        Some(request) => {
-            if ui
-                .add(Button::new("Capture region..."))
-                .on_hover_text("Freeze the screen and drag the region you want to wait for")
-                .clicked()
-            {
-                *request = true;
-            }
-        }
-        None => {
-            ui.add_enabled(false, Button::new("Capture region..."))
-                .on_disabled_hover_text("Text regions get their picker with the OCR phase");
+    row(ui, "", |ui| {
+        if ui
+            .add(Button::new("Capture region..."))
+            .on_hover_text("Freeze the screen and drag the region you want to watch")
+            .clicked()
+        {
+            *request = true;
         }
     });
+}
+
+/// Editor for relative steps: read-only totals, a scale factor and hand editing of a single step.
+fn relative_rows(ui: &mut egui::Ui, steps: &mut Vec<PathPoint>, scale: &mut f32) {
+    let (dx, dy) = total_delta(steps);
+    let mut collapse = false;
+    row(ui, "Total", |ui| {
+        ui.label(format!("dx {dx:+}, dy {dy:+}"));
+        ui.weak("raw units");
+    });
+    row(ui, "Steps", |ui| {
+        ui.label(format!("{}", steps.len()));
+        if ui
+            .add_enabled(steps.len() > 1, Button::new("Collapse to one step"))
+            .on_hover_text("Replace the recorded steps with a single step of the summed delta")
+            .on_disabled_hover_text("There is only one step already")
+            .clicked()
+        {
+            collapse = true;
+        }
+    });
+    row(ui, "Scale", |ui| {
+        ui.add(DragValue::new(scale).range(0.1..=10.0).speed(0.02).fixed_decimals(2));
+        ui.weak(format!("sends {}, {}", (dx as f32 * *scale) as i64, (dy as f32 * *scale) as i64));
+    });
+    if collapse {
+        *steps = vec![PathPoint { x: dx as i32, y: dy as i32, dt_ms: 0 }];
+    }
+    if let [only] = steps.as_mut_slice() {
+        row(ui, "Delta", |ui| {
+            ui.add(DragValue::new(&mut only.x).range(-32_768..=32_768).prefix("dx "));
+            ui.add(DragValue::new(&mut only.y).range(-32_768..=32_768).prefix("dy "));
+        });
+    }
+}
+
+/// Net displacement of a relative move, before `scale` is applied.
+fn total_delta(steps: &[PathPoint]) -> (i64, i64) {
+    steps.iter().fold((0, 0), |(x, y), step| (x + step.x as i64, y + step.y as i64))
 }
 
 /// Reads the foreground window after a short countdown so the user can switch to it first.

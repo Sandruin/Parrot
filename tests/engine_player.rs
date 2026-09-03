@@ -13,13 +13,14 @@ use macro_recorder::platform::mock::{
     InjectedCall, MockCapture, MockInjector, MockOcr, MockSleeper, MockWindowManager,
 };
 use macro_recorder::platform::sleeper::RealSleeper;
-use macro_recorder::platform::{CharKey, InputInjector, Sleeper, WindowInfo, WindowRef};
+use macro_recorder::platform::{CharKey, InputInjector, OcrLine, OcrWord, Sleeper, WindowInfo, WindowRef};
 
 struct Harness {
     injector: Arc<MockInjector>,
     sleeper: Arc<MockSleeper>,
     windows: Arc<MockWindowManager>,
     capture: Arc<MockCapture>,
+    ocr: Arc<MockOcr>,
     ctl: Arc<PlayerControl>,
     progress: Arc<Mutex<Vec<(usize, u32)>>>,
 }
@@ -31,9 +32,20 @@ impl Harness {
             sleeper: Arc::new(MockSleeper::default()),
             windows: Arc::new(MockWindowManager::default()),
             capture: Arc::new(MockCapture::new(RgbaImage::new(64, 64))),
+            ocr: Arc::new(MockOcr::default()),
             ctl: PlayerControl::new(),
             progress: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Widens the mock screen so a capture region beyond 64x64 still succeeds.
+    fn with_screen(self, width: u32, height: u32) -> Self {
+        *self.capture.screen.lock().unwrap() = RgbaImage::new(width, height);
+        self
+    }
+
+    fn reads(&self, lines: Vec<OcrLine>) {
+        *self.ocr.lines.lock().unwrap() = lines;
     }
 
     fn deps(&self) -> PlayerDeps {
@@ -42,7 +54,7 @@ impl Harness {
             capture: self.capture.clone(),
             windows: self.windows.clone(),
             sleeper: self.sleeper.clone(),
-            ocr: Arc::new(MockOcr::default()),
+            ocr: self.ocr.clone(),
         }
     }
 
@@ -83,6 +95,13 @@ fn key(vk: u16) -> Key {
 
 fn wait(ms: f64) -> Action {
     Action::Wait { duration: ms, unit: TimeUnit::Ms }
+}
+
+fn ocr_line(text: &str, words: &[(&str, Rect)]) -> OcrLine {
+    OcrLine {
+        text: text.into(),
+        words: words.iter().map(|(t, rect)| OcrWord { text: (*t).into(), rect: *rect }).collect(),
+    }
 }
 
 fn png_of(img: &RgbaImage) -> Vec<u8> {
@@ -376,26 +395,176 @@ fn search_mode_finds_a_template_inside_the_region() {
 }
 
 #[test]
-fn unsupported_actions_fail_with_a_clear_message() {
+fn wait_for_text_matches_and_quotes_the_read_text_on_timeout() {
+    let region = Rect::new(0, 0, 48, 16);
     let h = Harness::new();
-    let m = macro_of(vec![Action::WaitForText {
-        region: Rect::new(0, 0, 10, 10),
-        text: "ready".into(),
+    h.reads(vec![ocr_line(
+        "Export finished",
+        &[("Export", Rect::new(2, 2, 20, 8)), ("finished", Rect::new(24, 2, 22, 8))],
+    )]);
+    let found = macro_of(vec![Action::WaitForText {
+        region,
+        text: "export FINISHED".into(),
         case_sensitive: false,
-        poll_ms: 100,
+        poll_ms: 50,
         timeout_ms: 1_000,
     }]);
-    match h.run(&m) {
+    assert_eq!(h.run(&found), PlaybackOutcome::Completed);
+    assert_eq!(h.sleeper.total_slept(), Duration::ZERO);
+    assert_eq!(*h.ocr.calls.lock().unwrap(), 1);
+
+    let never = macro_of(vec![Action::WaitForText {
+        region,
+        text: "cancelled".into(),
+        case_sensitive: false,
+        poll_ms: 50,
+        timeout_ms: 200,
+    }]);
+    match h.run(&never) {
         PlaybackOutcome::Failed { index, error } => {
             assert_eq!(index, 0);
-            assert!(error.contains("not supported yet"), "{error}");
+            assert!(error.contains("cancelled"), "{error}");
+            assert!(error.contains("Export finished"), "{error}");
         }
-        other => panic!("expected a failure, got {other:?}"),
+        other => panic!("expected a timeout failure, got {other:?}"),
     }
+    assert!(h.sleeper.total_slept() >= Duration::from_millis(200));
+}
+
+#[test]
+fn a_long_read_is_truncated_in_the_timeout_error() {
+    let h = Harness::new();
+    let long = "z".repeat(500);
+    h.reads(vec![ocr_line(&long, &[(&long, Rect::new(0, 0, 40, 8))])]);
+    let m = macro_of(vec![Action::WaitForText {
+        region: Rect::new(0, 0, 48, 16),
+        text: "ready".into(),
+        case_sensitive: false,
+        poll_ms: 50,
+        timeout_ms: 50,
+    }]);
+    match h.run(&m) {
+        PlaybackOutcome::Failed { error, .. } => {
+            assert!(error.contains("..."), "{error}");
+            assert!(!error.contains(&"z".repeat(220)), "{error}");
+        }
+        other => panic!("expected a timeout failure, got {other:?}"),
+    }
+}
+
+#[test]
+fn click_on_text_clicks_the_centre_of_the_match_in_screen_pixels() {
+    let region = Rect::new(100, 50, 200, 40);
+    let h = Harness::new().with_screen(400, 200);
+    h.reads(vec![ocr_line(
+        "Save As",
+        &[("Save", Rect::new(10, 4, 30, 12)), ("As", Rect::new(46, 4, 14, 12))],
+    )]);
+    let m = macro_of(vec![Action::ClickOnText {
+        region,
+        text: "save as".into(),
+        case_sensitive: false,
+        button: MouseButton::Right,
+        poll_ms: 50,
+        timeout_ms: 1_000,
+    }]);
+    assert_eq!(h.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(
+        h.calls(),
+        vec![
+            InjectedCall::MoveAbs(Point::new(135, 60)),
+            InjectedCall::Button { button: MouseButton::Right, down: true },
+            InjectedCall::Button { button: MouseButton::Right, down: false },
+        ]
+    );
+    assert_eq!(h.sleeper.total_slept(), Duration::from_millis(30));
+}
+
+#[test]
+fn wait_for_file_sees_an_existing_path_and_times_out_on_a_missing_one() {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("macro-recorder-wait-for-file-{stamp}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let present = dir.join("ready.txt");
+    std::fs::write(&present, b"ok").unwrap();
 
     let h = Harness::new();
-    let m = macro_of(vec![Action::WaitForFile { path: "C:/x.png".into(), timeout_ms: 10 }]);
-    assert!(matches!(h.run(&m), PlaybackOutcome::Failed { .. }));
+    let found = macro_of(vec![Action::WaitForFile {
+        path: present.to_string_lossy().into_owned(),
+        timeout_ms: 1_000,
+    }]);
+    let found_outcome = h.run(&found);
+    let never = macro_of(vec![Action::WaitForFile {
+        path: dir.join("never.txt").to_string_lossy().into_owned(),
+        timeout_ms: 600,
+    }]);
+    let never_outcome = h.run(&never);
+    let slept = h.sleeper.total_slept();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    assert_eq!(found_outcome, PlaybackOutcome::Completed);
+    match never_outcome {
+        PlaybackOutcome::Failed { index, error } => {
+            assert_eq!(index, 0);
+            assert!(error.contains("never.txt"), "{error}");
+        }
+        other => panic!("expected a timeout failure, got {other:?}"),
+    }
+    assert_eq!(slept, Duration::from_millis(750));
+}
+
+#[test]
+fn relative_moves_scale_and_carry_the_rounding_remainder() {
+    let steps = vec![
+        PathPoint { x: 1, y: 1, dt_ms: 0 },
+        PathPoint { x: 1, y: 1, dt_ms: 10 },
+        PathPoint { x: 1, y: 1, dt_ms: 10 },
+        PathPoint { x: 1, y: 1, dt_ms: 10 },
+    ];
+    let plain = Harness::new();
+    let m = macro_of(vec![Action::MouseMoveRelative { steps: steps.clone(), scale: 1.0 }]);
+    assert_eq!(plain.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(plain.calls(), vec![InjectedCall::MoveRel { dx: 1, dy: 1 }; 4]);
+    assert_eq!(plain.sleeper.total_slept(), Duration::from_millis(30));
+    assert_eq!(plain.injector.cursor_pos().unwrap(), Point::new(4, 4));
+
+    let scaled = Harness::new();
+    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 1.5 }]);
+    assert_eq!(scaled.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(
+        scaled.calls(),
+        vec![
+            InjectedCall::MoveRel { dx: 2, dy: 2 },
+            InjectedCall::MoveRel { dx: 1, dy: 1 },
+            InjectedCall::MoveRel { dx: 2, dy: 2 },
+            InjectedCall::MoveRel { dx: 1, dy: 1 },
+        ]
+    );
+    assert_eq!(scaled.injector.cursor_pos().unwrap(), Point::new(6, 6));
+}
+
+#[test]
+fn relative_steps_that_round_to_nothing_are_skipped() {
+    let h = Harness::new();
+    let steps = vec![
+        PathPoint { x: 0, y: 0, dt_ms: 0 },
+        PathPoint { x: 0, y: 0, dt_ms: 15 },
+        PathPoint { x: -3, y: 4, dt_ms: 15 },
+    ];
+    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 1.0 }]);
+    assert_eq!(h.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(h.calls(), vec![InjectedCall::MoveRel { dx: -3, dy: 4 }]);
+    assert_eq!(h.sleeper.total_slept(), Duration::from_millis(30));
+
+    let small = Harness::new();
+    let steps = vec![
+        PathPoint { x: 1, y: 0, dt_ms: 0 },
+        PathPoint { x: 1, y: 0, dt_ms: 5 },
+        PathPoint { x: 1, y: 0, dt_ms: 5 },
+    ];
+    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 0.4 }]);
+    assert_eq!(small.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(small.calls(), vec![InjectedCall::MoveRel { dx: 1, dy: 0 }]);
 }
 
 /// Injector with a keyboard layout, so scan-code typing and its fallback are both exercised.

@@ -57,6 +57,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
             ui.add_space(4.0);
             let record = &mut app.settings.record;
             changed |= ui.checkbox(&mut record.record_mouse_moves, "Record mouse moves").changed();
+            changed |= ui
+                .add_enabled(
+                    record.record_mouse_moves,
+                    egui::Checkbox::new(
+                        &mut record.relative_mouse_moves,
+                        "Record mouse moves as relative steps (raw input games)",
+                    ),
+                )
+                .on_hover_text("Stores cursor deltas instead of absolute screen positions")
+                .changed();
             changed |= ui.checkbox(&mut record.record_window_changes, "Record window changes").changed();
             changed |= ui.checkbox(&mut record.fold_clicks, "Fold button down and up into a click").changed();
             changed |=
