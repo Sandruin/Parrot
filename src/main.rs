@@ -59,7 +59,11 @@ fn main() -> Result<()> {
         options,
         Box::new(move |cc| {
             *repaint_ctx.lock().unwrap() = Some(cc.egui_ctx.clone());
-            Ok(Box::new(ui::App::new(cc, engine, settings, services)))
+            let mut app = ui::App::new(cc, engine, settings, services);
+            if let Some(path) = std::env::args_os().nth(1) {
+                ui::files::open_path(&mut app, path.into());
+            }
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe: {e}"))?;
