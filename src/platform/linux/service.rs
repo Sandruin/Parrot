@@ -30,6 +30,8 @@ pub const AUTO_STOP_GRACE: Duration = Duration::from_millis(300);
 const CURSOR_POLL: Duration = Duration::from_millis(16);
 /// How often `/dev/input` is checked for plugged or unplugged devices.
 const DEVICE_RESCAN: Duration = Duration::from_secs(2);
+/// Lua global that keeps the overlay layer rule between `hyprctl eval` calls.
+const RULE: &str = "_G.macro_recorder_overlay_rule";
 
 /// Handle to the service thread that reads input devices, owns the overlay and handles commands.
 pub struct LinuxHandle {
@@ -303,15 +305,27 @@ impl Service {
         let Some(h) = &self.hyprland else { return };
         if std::env::var_os(overlay::CAPTURABLE_ENV).is_some() {
             log::info!("{} is set, the overlay stays visible to screen capture", overlay::CAPTURABLE_ENV);
+            self.drop_layer_rule();
             return;
         }
         let legacy = format!("layerrule noscreenshare, {}", overlay::NAMESPACE);
         let lua = format!(
-            "hl.layer_rule({{ match = {{ namespace = \"{}\" }}, no_screen_share = true }})",
+            "if {RULE} then {RULE}:set_enabled(false) end; \
+             {RULE} = hl.layer_rule({{ match = {{ namespace = \"{}\" }}, no_screen_share = true }})",
             overlay::NAMESPACE
         );
         if let Err(e) = h.configure(&legacy, &lua) {
             log::info!("the overlay will be visible to screen captures: {e:#}");
+        }
+    }
+
+    /// Lifts the rule again, since it would otherwise outlive this process inside the compositor.
+    fn drop_layer_rule(&self) {
+        let Some(h) = &self.hyprland else { return };
+        let legacy = format!("layerrule unset, {}", overlay::NAMESPACE);
+        let lua = format!("if {RULE} then {RULE}:set_enabled(false); {RULE} = nil end");
+        if let Err(e) = h.configure(&legacy, &lua) {
+            log::debug!("removing the overlay layer rule failed: {e:#}");
         }
     }
 
@@ -560,5 +574,6 @@ impl Drop for Service {
         self.hotkeys.clear();
         self.overlay.window.hide(&mut self.wayland);
         let _ = self.wayland.flush();
+        self.drop_layer_rule();
     }
 }

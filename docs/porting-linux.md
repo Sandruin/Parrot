@@ -43,6 +43,14 @@ A `no_screen_share` layer rule keeps the overlay out of captures unless `MACRO_O
 - The recorder sees hardware input only: taps on touchpads are synthesized by the compositor and are not recorded, physical buttons and mice are.
 - Without Hyprland there is no cursor position, no window activation and no swallowed hotkey chords; fallback chords still trigger but also reach the focused application.
 - Injected input is compositor level, so recordings never contain the macro's own playback and every physical key or button press interrupts playback when auto-stop is on.
+- The injector compiles the keyboard layout once at startup; switching layouts while the app runs needs a restart.
+- Tesseract is slow on long unbroken strings such as paths or hashes (seconds instead of a few hundred milliseconds), so keep text wait regions tight.
+- Hyprland reports whole logical units for the cursor, so on fractionally scaled outputs recorded and read back positions are exact to one pixel only.
+
+## Testing on Hyprland
+
+`scripts/screenshot.sh` launches the app floating and screenshots it with grim.
+Hardware-like input for testing the recorder can come from `ydotool`, whose uinput device shows up in `/dev/input` like a real mouse or keyboard, while the app's own playback stays invisible to the recorder.
 
 ## Other compositors
 

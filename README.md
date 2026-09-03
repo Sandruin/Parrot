@@ -33,6 +33,8 @@ cargo run --release -- path/to/macro.json
 
 Requires Rust 1.95 or newer. On Windows the build embeds a per-monitor DPI manifest so coordinates are physical pixels everywhere.
 
+![Macro Recorder on Hyprland with a recorded macro and the click overlay](docs/screenshot-linux.png)
+
 On Linux the build links against the system tesseract, leptonica and libxkbcommon (Arch: `pacman -S tesseract tesseract-data-eng leptonica libxkbcommon clang`, clang for the generated bindings). Recording reads `/dev/input`, so the user must be in the `input` group. Cursor positions, window activation and global hotkeys use the Hyprland IPC socket; on other Wayland compositors playback, capture and the overlay still work but those three do not. Macro files are portable between the platforms: keys are stored by position (scan code) plus the Windows virtual-key code, and screen coordinates are physical pixels.
 
 ## Layout
