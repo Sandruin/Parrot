@@ -165,6 +165,7 @@ fn top_candidates(hay: &Plane, tpl: &Plane, st: &Stats, limit: usize) -> Vec<(us
     picked
 }
 
+#[cfg(test)]
 fn search_full(hay: &Plane, tpl: &Plane) -> Option<(Point, f32)> {
     let st = stats(tpl);
     if !fits(hay, tpl) || st.var <= EPS {
