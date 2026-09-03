@@ -20,19 +20,25 @@ fn main() -> Result<()> {
 
     let repaint_ctx: Arc<Mutex<Option<egui::Context>>> = Default::default();
     let repaint_slot = repaint_ctx.clone();
-    let engine = engine::spawn_engine(engine::EngineDeps {
-        raw_rx,
-        win32_tx: win32.cmd_sender(),
-        repaint: Box::new(move || {
-            if let Some(ctx) = repaint_slot.lock().unwrap().as_ref() {
-                ctx.request_repaint();
-            }
-        }),
-        injector: Arc::new(platform::win32::injector::Win32Injector),
-        capture: Arc::new(platform::win32::capture::Win32Capture),
-        windows: Arc::new(platform::win32::window::Win32Windows),
-        sleeper: Arc::new(platform::sleeper::RealSleeper::default()),
-    })?;
+    let engine = if std::env::var_os("MACRO_FAKE_ENGINE").is_some() {
+        log::warn!("MACRO_FAKE_ENGINE is set: using the scripted fake engine");
+        drop(raw_rx);
+        ui::fake_engine::spawn_fake()
+    } else {
+        engine::spawn_engine(engine::EngineDeps {
+            raw_rx,
+            win32_tx: win32.cmd_sender(),
+            repaint: Box::new(move || {
+                if let Some(ctx) = repaint_slot.lock().unwrap().as_ref() {
+                    ctx.request_repaint();
+                }
+            }),
+            injector: Arc::new(platform::win32::injector::Win32Injector),
+            capture: Arc::new(platform::win32::capture::Win32Capture),
+            windows: Arc::new(platform::win32::window::Win32Windows),
+            sleeper: Arc::new(platform::sleeper::RealSleeper::default()),
+        })?
+    };
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
