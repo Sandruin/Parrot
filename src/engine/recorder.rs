@@ -21,6 +21,8 @@ pub struct Recorder {
     open_path: Option<OpenPath>,
     last_emit: Option<Instant>,
     last_cursor: Option<Point>,
+    /// Keys currently held, so operating system auto-repeat can be dropped.
+    held_keys: Vec<u16>,
 }
 
 /// A down event held back until it is clear whether a matching up follows in time.
@@ -59,7 +61,15 @@ enum MoveStep {
 
 impl Recorder {
     pub fn new(opts: RecordOptions, chord_vks: Vec<u16>) -> Self {
-        Self { opts, chord_vks, pending: None, open_path: None, last_emit: None, last_cursor: None }
+        Self {
+            opts,
+            chord_vks,
+            pending: None,
+            open_path: None,
+            last_emit: None,
+            last_cursor: None,
+            held_keys: Vec::new(),
+        }
     }
 
     pub fn options(&self) -> &RecordOptions {
@@ -116,11 +126,17 @@ impl Recorder {
         self.flush_path(&mut out);
         self.last_emit = None;
         self.last_cursor = None;
+        self.held_keys.clear();
         out
     }
 
     fn on_key(&mut self, key: Key, down: bool, at: Instant, out: &mut Vec<Action>) {
         if down {
+            // Holding a key makes Windows resend key down; the target app repeats on its own.
+            if self.held_keys.contains(&key.vk) {
+                return;
+            }
+            self.held_keys.push(key.vk);
             self.flush_pending(out);
             self.flush_path(out);
             if self.opts.fold_key_presses {
@@ -130,6 +146,7 @@ impl Recorder {
             }
             return;
         }
+        self.held_keys.retain(|vk| *vk != key.vk);
         if let Some(Pending::Key { key: held, at: held_at }) = &self.pending
             && held.vk == key.vk
             && at.saturating_duration_since(*held_at) < FOLD_WINDOW
@@ -562,6 +579,40 @@ mod tests {
                 Action::KeyDown { key: key_of(B) },
                 Action::KeyUp { key: key_of(A) },
                 Action::KeyUp { key: key_of(B) },
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_repeat_becomes_one_hold() {
+        let mut s = stream();
+        for ms in [0, 35, 70, 105, 140, 175] {
+            s.key(A, true, ms);
+        }
+        let out = s.key(A, false, 900).finish();
+        assert_eq!(
+            out,
+            vec![
+                Action::KeyDown { key: key_of(A) },
+                wait(900.0, TimeUnit::Ms),
+                Action::KeyUp { key: key_of(A) },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_repeating_key_does_not_break_a_second_key_press() {
+        let mut s = stream();
+        let out =
+            s.key(A, true, 0).key(A, true, 35).key(B, true, 50).key(B, false, 80).key(A, false, 200).finish();
+        assert_eq!(
+            out,
+            vec![
+                Action::KeyDown { key: key_of(A) },
+                wait(50.0, TimeUnit::Ms),
+                press(B),
+                wait(120.0, TimeUnit::Ms),
+                Action::KeyUp { key: key_of(A) },
             ]
         );
     }
