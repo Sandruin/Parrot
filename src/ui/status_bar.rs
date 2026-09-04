@@ -24,6 +24,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         };
         ui.label(RichText::new(app.mode.label()).font(style::medium(12.5)).color(mode_color));
 
+        // Windows hides keystrokes aimed at our own focused window from the low-level hook.
+        if app.mode == Mode::Recording && ui.input(|i| i.focused) {
+            ui.separator();
+            ui.label(
+                RichText::new("keys typed here are not captured")
+                    .font(style::medium(12.5))
+                    .color(style::record_red(ui.visuals())),
+            )
+            .on_hover_text(
+                "Windows does not report keystrokes sent to the recorder's own window.\n\
+                 Click into the program you are automating and they will be recorded.",
+            );
+        }
+
         if app.elevation_warning {
             ui.separator();
             ui.label(

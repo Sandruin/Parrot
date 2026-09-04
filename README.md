@@ -36,6 +36,10 @@ Macros are saved to `Documents/Parrot` by default; the folder is created on firs
 
 Requires Rust 1.95 or newer. On Windows the build embeds a per-monitor DPI manifest so coordinates are physical pixels everywhere.
 
+## Recording keys into the recorder's own window
+
+Windows does not report keystrokes aimed at the focused window of the process that owns the keyboard hook, so keys typed while the recorder itself has focus are not captured; mouse input is unaffected, and the global hotkeys keep working because they arrive as `WM_HOTKEY` rather than through the hook. Click into the program you are automating and recording behaves normally. The status bar says so while recording with the window focused.
+
 ## Layout
 
 - `src/model` shared action model, macro file format, settings
