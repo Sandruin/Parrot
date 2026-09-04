@@ -57,9 +57,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
 
-        ui.separator();
-        let color = if app.status.error { ui.visuals().error_fg_color } else { ui.visuals().text_color() };
-        ui.add(egui::Label::new(RichText::new(&app.status.text).color(color)).truncate());
+        if !app.status.text.is_empty() {
+            ui.separator();
+            let color =
+                if app.status.error { ui.visuals().error_fg_color } else { ui.visuals().text_color() };
+            ui.add(egui::Label::new(RichText::new(&app.status.text).color(color)).truncate());
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(RichText::new(hotkey_hints(app)).small().color(ui.visuals().weak_text_color()));

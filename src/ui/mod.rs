@@ -91,6 +91,8 @@ pub struct App {
     pub services: UiServices,
     pub status: Status,
     pub progress: Option<Progress>,
+    /// Actions captured since the current recording started.
+    recorded: usize,
     /// Item the player is currently executing, highlighted in the list.
     pub running: Option<ActionId>,
     pub dialog: Option<properties::Dialog>,
@@ -141,6 +143,7 @@ impl App {
             services,
             status: Status { text: "Ready".into(), error: false },
             progress: None,
+            recorded: 0,
             running: None,
             dialog: None,
             settings_open: false,
@@ -429,7 +432,9 @@ impl App {
         match event {
             EngineEvent::RecordingStarted => {
                 self.mode = Mode::Recording;
-                self.info("Recording");
+                self.recorded = 0;
+                // The mode label already says Recording, so leave the message area empty.
+                self.status = Status::default();
             }
             EngineEvent::Recorded(item) => {
                 let (comment, enabled) = (item.comment, item.enabled);
@@ -438,13 +443,14 @@ impl App {
                     new.comment = comment;
                     new.enabled = enabled;
                 }
+                self.recorded += 1;
                 self.dirty = true;
                 self.select(Some(id));
                 self.scroll_to = Some(id);
             }
             EngineEvent::RecordingStopped => {
                 self.mode = Mode::Idle;
-                self.info(format!("Recorded {} actions", self.doc.items.len()));
+                self.info(format!("Recorded {} {}", self.recorded, actions(self.recorded)));
             }
             EngineEvent::PlaybackStarted { total } => {
                 self.mode = Mode::Playing;
