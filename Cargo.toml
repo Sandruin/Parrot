@@ -48,6 +48,7 @@ windows = { version = "0.62", features = [
 
 [build-dependencies]
 embed-manifest = "1.5"
+embed-resource = "3.0.11"
 
 [profile.release]
 lto = "thin"

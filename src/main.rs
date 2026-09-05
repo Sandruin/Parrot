@@ -49,6 +49,7 @@ fn main() -> Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Parrot")
+            .with_icon(app_icon())
             .with_inner_size([960.0, 680.0])
             .with_min_inner_size([720.0, 480.0])
             .with_app_id("parrot"),
@@ -71,4 +72,20 @@ fn main() -> Result<()> {
 
     drop(win32);
     Ok(())
+}
+
+/// Window and taskbar icon, decoded from the same artwork the executable's icon resource uses.
+fn app_icon() -> egui::IconData {
+    let bytes = include_bytes!("../assets/parrot.png");
+    match image::load_from_memory(bytes) {
+        Ok(image) => {
+            let rgba = image.into_rgba8();
+            let (width, height) = rgba.dimensions();
+            egui::IconData { rgba: rgba.into_raw(), width, height }
+        }
+        Err(e) => {
+            log::warn!("cannot decode the window icon: {e}");
+            egui::IconData::default()
+        }
+    }
 }

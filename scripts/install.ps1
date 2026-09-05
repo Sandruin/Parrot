@@ -53,19 +53,27 @@ New-Item -ItemType Directory -Force -Path $Dest | Out-Null
 Copy-Item -Path $Exe -Destination $target -Force
 Copy-Item -Path (Join-Path $PSScriptRoot "install.ps1") -Destination $Dest -Force
 
+# Ship the icon as a file too, so the shortcut has one even if the exe resource is missing.
+$icon = "$target,0"
+$source = Join-Path $repo "assets\$AppName.ico"
+if (Test-Path $source) {
+    Copy-Item -Path $source -Destination $Dest -Force
+    $icon = Join-Path $Dest "$AppName.ico"
+}
+
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
 $link.TargetPath = $target
 $link.WorkingDirectory = $Dest
 $link.Description = "$AppName macro recorder"
-$link.IconLocation = "$target,0"
+$link.IconLocation = $icon
 $link.Save()
 
 New-Item -Path $regKey -Force | Out-Null
 $uninstallCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$Dest\install.ps1`" -Uninstall -Force"
 $strings = @{
     DisplayName     = $AppName
-    DisplayIcon     = $target
+    DisplayIcon     = $icon
     DisplayVersion  = $version
     Publisher       = "Sandruin"
     InstallLocation = $Dest

@@ -1,5 +1,7 @@
 # Parrot
 
+<img src="assets/parrot.png" width="112" align="right" alt="Parrot icon">
+
 A small desktop macro recorder for Windows, written in Rust with egui. Record keyboard and mouse input, edit the resulting action list, and replay it into games and desktop apps. Built for personal automation: sandbox games and repetitive workflows.
 
 ![Parrot with a demo macro loaded](docs/screenshot.png)
@@ -58,6 +60,7 @@ Copies the release binary to `%LOCALAPPDATA%\Programs\Parrot`, adds a start menu
 - `examples/` small binaries for smoke testing hooks, injection, OCR and the overlay
 - `scripts/screenshot.ps1` launches the app and captures its window
 - `scripts/install.ps1` installs into the start menu for the current user
+- `assets/` fonts and the application icon
 
 ## Development
 
