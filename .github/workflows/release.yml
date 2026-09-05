@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag against the crate version
+        shell: pwsh
+        run: |
+          $match = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          $version = $match.Matches[0].Groups[1].Value
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -ne $tag) { throw "tag $tag does not match the crate version $version" }
+
+      - run: cargo test --release
+      - run: cargo build --release
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: target/release/parrot.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
