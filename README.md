@@ -1,8 +1,8 @@
-# Macro Recorder
+# Parrot
 
 A small desktop macro recorder for Windows, written in Rust with egui. Record keyboard and mouse input, edit the resulting action list, and replay it into games and desktop apps. Built for personal automation: sandbox games and repetitive workflows.
 
-![Macro Recorder with a demo macro loaded](docs/screenshot.png)
+![Parrot with a demo macro loaded](docs/screenshot.png)
 
 ## Features
 
@@ -67,4 +67,4 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Set `MACRO_FAKE_ENGINE=1` to run the GUI against a scripted engine and `MACRO_DEMO_DOC=1` to preload a macro with one action of every kind.
+Set `PARROT_FAKE_ENGINE=1` to run the GUI against a scripted engine and `PARROT_DEMO_DOC=1` to preload a macro with one action of every kind.

@@ -21,10 +21,10 @@ use windows::core::{PCWSTR, w};
 use super::injector::virtual_screen;
 use crate::model::{OverlayScene, OverlayShape, Point, Rect};
 
-const CLASS_NAME: PCWSTR = w!("MacroRecorderOverlay");
+const CLASS_NAME: PCWSTR = w!("ParrotOverlay");
 
 /// Set this environment variable to keep the overlay visible to screen capture, for manual checks.
-const CAPTURABLE_ENV: &str = "MACRO_OVERLAY_CAPTURABLE";
+const CAPTURABLE_ENV: &str = "PARROT_OVERLAY_CAPTURABLE";
 
 /// Padding around the scene bounds so strokes, arrow heads and anti-aliasing are never clipped.
 const MARGIN: i32 = 24;
@@ -155,7 +155,7 @@ fn create_window(instance: HINSTANCE) -> Result<HWND> {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
             CLASS_NAME,
-            w!("Macro Recorder Overlay"),
+            w!("Parrot Overlay"),
             WS_POPUP,
             0,
             0,

@@ -2027,34 +2027,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
-name = "macro-recorder"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "crossbeam-channel",
- "dirs",
- "eframe",
- "egui",
- "egui_dnd",
- "egui_extras",
- "egui_material_icons",
- "embed-manifest",
- "env_logger",
- "glob",
- "image",
- "log",
- "regex",
- "rfd",
- "serde",
- "serde_json",
- "spin_sleep",
- "thiserror 2.0.20",
- "tiny-skia 0.12.0",
- "windows",
-]
-
-[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2626,6 +2598,34 @@ dependencies = [
  "redox_syscall 0.5.18",
  "smallvec",
  "windows-link",
+]
+
+[[package]]
+name = "parrot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "crossbeam-channel",
+ "dirs",
+ "eframe",
+ "egui",
+ "egui_dnd",
+ "egui_extras",
+ "egui_material_icons",
+ "embed-manifest",
+ "env_logger",
+ "glob",
+ "image",
+ "log",
+ "regex",
+ "rfd",
+ "serde",
+ "serde_json",
+ "spin_sleep",
+ "thiserror 2.0.20",
+ "tiny-skia 0.12.0",
+ "windows",
 ]
 
 [[package]]

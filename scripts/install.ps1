@@ -33,7 +33,7 @@ if ($Uninstall) {
 
 # Fall back to the release build in this repository, building it if it is missing.
 $repo = Split-Path $PSScriptRoot -Parent
-if (-not $Exe) { $Exe = Join-Path $repo "target\release\macro-recorder.exe" }
+if (-not $Exe) { $Exe = Join-Path $repo "target\release\parrot.exe" }
 if (-not (Test-Path $Exe)) {
     Write-Output "building the release binary..."
     Push-Location $repo

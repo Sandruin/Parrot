@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use macro_recorder::model::Point;
-use macro_recorder::platform::InputInjector;
-use macro_recorder::platform::win32::injector::Win32Injector;
-use macro_recorder::platform::win32::{dpi, keys};
+use parrot::model::Point;
+use parrot::platform::InputInjector;
+use parrot::platform::win32::injector::Win32Injector;
+use parrot::platform::win32::{dpi, keys};
 
 const SIDE: i32 = 80;
 const STEPS: i32 = 20;
@@ -43,7 +43,7 @@ fn main() -> Result<()> {
                 println!("  {ch:?} is not on the current layout");
                 continue;
             };
-            let shift = keys::key_from_vk(macro_recorder::model::vk::LSHIFT);
+            let shift = keys::key_from_vk(parrot::model::vk::LSHIFT);
             if chord.shift {
                 injector.key(shift, true)?;
             }

@@ -128,7 +128,7 @@ impl App {
         services: UiServices,
     ) -> Self {
         style::apply(&cc.egui_ctx);
-        let demo = std::env::var_os("MACRO_DEMO_DOC").is_some();
+        let demo = std::env::var_os("PARROT_DEMO_DOC").is_some();
         Self {
             doc: if demo { fake_engine::demo_doc() } else { Macro::default() },
             path: None,
@@ -540,7 +540,7 @@ impl App {
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Untitled".to_string());
-        let title = format!("{}{name} - Macro Recorder", if self.dirty { "*" } else { "" });
+        let title = format!("{}{name} - Parrot", if self.dirty { "*" } else { "" });
         if title != self.title {
             self.title = title.clone();
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));

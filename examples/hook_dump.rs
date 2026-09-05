@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use macro_recorder::model::{HotkeyConfig, RawInputEvent, Win32Command};
-use macro_recorder::platform::win32;
+use parrot::model::{HotkeyConfig, RawInputEvent, Win32Command};
+use parrot::platform::win32;
 
 /// Seconds to dump for, overridable with the first argument.
 fn duration() -> Duration {

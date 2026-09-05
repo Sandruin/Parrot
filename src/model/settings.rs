@@ -30,14 +30,22 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
-    /// Settings file location, `%APPDATA%/macro-recorder/settings.json` on Windows.
+    /// Settings file location, `%APPDATA%/parrot/settings.json` on Windows.
     pub fn default_path() -> Option<PathBuf> {
+        dirs::config_dir().map(|d| d.join("parrot").join("settings.json"))
+    }
+
+    /// Settings written before the rename to Parrot, read once so they are not lost.
+    fn legacy_path() -> Option<PathBuf> {
         dirs::config_dir().map(|d| d.join("macro-recorder").join("settings.json"))
     }
 
     /// Loads settings from the default path, falling back to defaults on any error.
     pub fn load_or_default() -> Self {
-        Self::default_path().and_then(|p| Self::load(&p).ok()).unwrap_or_default()
+        Self::default_path()
+            .and_then(|p| Self::load(&p).ok())
+            .or_else(|| Self::legacy_path().and_then(|p| Self::load(&p).ok()))
+            .unwrap_or_default()
     }
 
     pub fn load(path: &Path) -> Result<Self> {

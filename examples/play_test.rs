@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use macro_recorder::engine::player::{Player, PlayerDeps};
-use macro_recorder::engine::{EngineDeps, spawn_engine};
-use macro_recorder::model::{Action, EngineCommand, EngineEvent, Macro, PlayerControl};
-use macro_recorder::platform::sleeper::RealSleeper;
-use macro_recorder::platform::win32::{
+use parrot::engine::player::{Player, PlayerDeps};
+use parrot::engine::{EngineDeps, spawn_engine};
+use parrot::model::{Action, EngineCommand, EngineEvent, Macro, PlayerControl};
+use parrot::platform::sleeper::RealSleeper;
+use parrot::platform::win32::{
     capture::Win32Capture, injector::Win32Injector, keys, ocr::Win32Ocr, window::Win32Windows,
 };
 
@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
     env_logger::init();
     let through_engine = std::env::args().any(|a| a == "--engine");
     let (raw_tx, raw_rx) = crossbeam_channel::unbounded();
-    let win32 = macro_recorder::platform::win32::spawn_win32_service(raw_tx)?;
+    let win32 = parrot::platform::win32::spawn_win32_service(raw_tx)?;
 
     let mut doc = Macro::default();
     for vk in [0x48u16, 0x49, 0x20] {

@@ -4,13 +4,13 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use image::RgbaImage;
-use macro_recorder::engine::{EngineDeps, EngineHandle, spawn_engine};
-use macro_recorder::model::{
+use parrot::engine::{EngineDeps, EngineHandle, spawn_engine};
+use parrot::model::{
     Action, ActionItem, EngineCommand, EngineEvent, Hotkey, HotkeyAction, HotkeyConfig, Key, Macro,
     MacroSettings, PlaybackOutcome, Point, RawInputEvent, RecordOptions, Repeat, TimeUnit, Win32Command,
 };
-use macro_recorder::platform::mock::{MockCapture, MockInjector, MockOcr, MockWindowManager};
-use macro_recorder::platform::sleeper::RealSleeper;
+use parrot::platform::mock::{MockCapture, MockInjector, MockOcr, MockWindowManager};
+use parrot::platform::sleeper::RealSleeper;
 
 struct Rig {
     engine: EngineHandle,
@@ -144,8 +144,8 @@ fn playback_reports_start_progress_and_finish() {
     let rig = Rig::new();
     let m = macro_of(vec![
         Action::MouseButton {
-            button: macro_recorder::model::MouseButton::Left,
-            event: macro_recorder::model::ButtonEvent::Click,
+            button: parrot::model::MouseButton::Left,
+            event: parrot::model::ButtonEvent::Click,
             pos: Some(Point::new(5, 6)),
         },
         Action::Wait { duration: 20.0, unit: TimeUnit::Ms },
@@ -204,7 +204,7 @@ fn playback_is_refused_while_another_one_runs() {
 #[test]
 fn overlay_commands_are_forwarded() {
     let rig = Rig::new();
-    let scene = macro_recorder::model::OverlayScene::default();
+    let scene = parrot::model::OverlayScene::default();
     rig.engine.send(EngineCommand::ShowOverlay(scene));
     assert!(matches!(rig.win32(), Win32Command::OverlayShow(_)));
     rig.engine.send(EngineCommand::HideOverlay);

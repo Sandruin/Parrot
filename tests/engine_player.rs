@@ -4,16 +4,16 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use image::{Rgba, RgbaImage};
-use macro_recorder::engine::player::{Player, PlayerDeps, ProgressFn};
-use macro_recorder::model::{
+use parrot::engine::player::{Player, PlayerDeps, ProgressFn};
+use parrot::model::{
     Action, ActionItem, ButtonEvent, ImageMatchMode, Key, Macro, MacroSettings, MouseButton, MousePathMode,
     PathPoint, PlaybackOutcome, PlayerControl, Point, Rect, Repeat, TextMatch, TextMode, TimeUnit,
 };
-use macro_recorder::platform::mock::{
+use parrot::platform::mock::{
     InjectedCall, MockCapture, MockInjector, MockOcr, MockSleeper, MockWindowManager,
 };
-use macro_recorder::platform::sleeper::RealSleeper;
-use macro_recorder::platform::{CharKey, InputInjector, OcrLine, OcrWord, Sleeper, WindowInfo, WindowRef};
+use parrot::platform::sleeper::RealSleeper;
+use parrot::platform::{CharKey, InputInjector, OcrLine, OcrWord, Sleeper, WindowInfo, WindowRef};
 
 struct Harness {
     injector: Arc<MockInjector>,
@@ -107,7 +107,7 @@ fn ocr_line(text: &str, words: &[(&str, Rect)]) -> OcrLine {
 /// Fresh directory under the system temp dir, unique per call so parallel tests cannot collide.
 fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("macro-recorder-{tag}-{stamp}"));
+    let dir = std::env::temp_dir().join(format!("parrot-{tag}-{stamp}"));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }

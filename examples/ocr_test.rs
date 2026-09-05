@@ -1,11 +1,11 @@
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
-use macro_recorder::model::Rect;
-use macro_recorder::platform::win32::capture::Win32Capture;
-use macro_recorder::platform::win32::dpi;
-use macro_recorder::platform::win32::ocr::Win32Ocr;
-use macro_recorder::platform::{Ocr, ScreenCapture};
+use parrot::model::Rect;
+use parrot::platform::win32::capture::Win32Capture;
+use parrot::platform::win32::dpi;
+use parrot::platform::win32::ocr::Win32Ocr;
+use parrot::platform::{Ocr, ScreenCapture};
 
 const DEFAULT_W: i32 = 800;
 const DEFAULT_H: i32 = 300;

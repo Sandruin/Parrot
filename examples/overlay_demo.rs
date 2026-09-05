@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use macro_recorder::model::{OverlayScene, OverlayShape, Point, Rect, Win32Command};
-use macro_recorder::platform::InputInjector;
-use macro_recorder::platform::win32;
+use parrot::model::{OverlayScene, OverlayShape, Point, Rect, Win32Command};
+use parrot::platform::InputInjector;
+use parrot::platform::win32;
 
 const SHOWN: Duration = Duration::from_secs(4);
 

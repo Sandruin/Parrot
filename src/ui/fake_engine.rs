@@ -120,7 +120,7 @@ fn turn_steps() -> Vec<PathPoint> {
     (0..12).map(|i| PathPoint { x: 14 - i / 3, y: if i % 4 == 0 { -3 } else { 0 }, dt_ms: 8 }).collect()
 }
 
-/// Macro with one item of every kind, loaded when `MACRO_DEMO_DOC` is set.
+/// Macro with one item of every kind, loaded when `PARROT_DEMO_DOC` is set.
 pub fn demo_doc() -> Macro {
     let key = Key { vk: 0x41, scancode: 0x1E, extended: false };
     let mut doc = Macro { name: "demo".into(), ..Default::default() };
@@ -139,11 +139,7 @@ pub fn demo_doc() -> Macro {
         (Action::KeyUp { key }, ""),
         (Action::KeyPress { key: Key { vk: vk::RETURN, scancode: 0x1C, extended: false } }, ""),
         (
-            Action::TypeText {
-                text: "hello from the macro recorder".into(),
-                mode: TextMode::Unicode,
-                char_delay_ms: 12,
-            },
+            Action::TypeText { text: "hello from parrot".into(), mode: TextMode::Unicode, char_delay_ms: 12 },
             "typed with unicode events",
         ),
         (Action::MouseMove { path: arc_path() }, ""),

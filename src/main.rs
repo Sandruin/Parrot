@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use macro_recorder::{engine, model, platform, ui};
+use parrot::{engine, model, platform, ui};
 
 fn main() -> Result<()> {
     #[cfg(windows)]
@@ -25,8 +25,8 @@ fn main() -> Result<()> {
 
     let repaint_ctx: Arc<Mutex<Option<egui::Context>>> = Default::default();
     let repaint_slot = repaint_ctx.clone();
-    let engine = if std::env::var_os("MACRO_FAKE_ENGINE").is_some() {
-        log::warn!("MACRO_FAKE_ENGINE is set: using the scripted fake engine");
+    let engine = if std::env::var_os("PARROT_FAKE_ENGINE").is_some() {
+        log::warn!("PARROT_FAKE_ENGINE is set: using the scripted fake engine");
         drop(raw_rx);
         ui::fake_engine::spawn_fake()
     } else {
@@ -48,15 +48,15 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Macro Recorder")
+            .with_title("Parrot")
             .with_inner_size([960.0, 680.0])
             .with_min_inner_size([720.0, 480.0])
-            .with_app_id("macro-recorder"),
+            .with_app_id("parrot"),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Macro Recorder",
+        "Parrot",
         options,
         Box::new(move |cc| {
             *repaint_ctx.lock().unwrap() = Some(cc.egui_ctx.clone());

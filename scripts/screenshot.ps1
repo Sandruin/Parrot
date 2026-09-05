@@ -1,8 +1,8 @@
 # Launches the app (or attaches to a running instance), screenshots its window and optionally closes it.
-# Usage: powershell -File scripts/screenshot.ps1 -Out shot.png [-Exe target/debug/macro-recorder.exe] [-WaitSeconds 4] [-Keep] [-FullScreen]
+# Usage: powershell -File scripts/screenshot.ps1 -Out shot.png [-Exe target/debug/parrot.exe] [-WaitSeconds 4] [-Keep] [-FullScreen]
 param(
-    [string]$Exe = "target/debug/macro-recorder.exe",
-    [string]$ProcessName = "macro-recorder",
+    [string]$Exe = "target/debug/parrot.exe",
+    [string]$ProcessName = "parrot",
     [string]$Out = "screenshots/app.png",
     [int]$WaitSeconds = 4,
     [switch]$Keep,
