@@ -557,8 +557,8 @@ impl App {
     }
 
     /// Starts the region picker for the action the properties dialog is editing.
-    pub fn pick_region(&mut self, target: ActionId) {
-        region_picker::open(self, target);
+    pub fn pick_region(&mut self, target: ActionId, purpose: region_picker::Purpose) {
+        region_picker::open(self, target, purpose);
     }
 
     /// True while a modal or a text field owns the keyboard, so list shortcuts stay quiet.

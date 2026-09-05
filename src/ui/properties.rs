@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use egui::{Button, DragValue, Modal, RichText, Slider, TextEdit, Vec2};
 
-use super::{App, UiServices, action_list, keymap, style};
+use super::{App, UiServices, action_list, keymap, region_picker, style};
 use crate::engine::matcher;
 use crate::model::{
     Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
@@ -20,8 +20,9 @@ pub struct Dialog {
     /// Set while the key picker waits for the next key press.
     capture_key: bool,
     preview: Option<Preview>,
-    /// Set by the "Capture region..." button, consumed once the modal has been laid out.
+    /// Set by the capture buttons, consumed once the modal has been laid out.
     request_region: bool,
+    request_template: bool,
     switch: Switch,
     /// Unit the timeout is shown in; the action itself always stores milliseconds.
     timeout_unit: TimeUnit,
@@ -58,10 +59,27 @@ impl Dialog {
             capture_key: false,
             preview: None,
             request_region: false,
+            request_template: false,
             switch: Switch::default(),
             timeout_unit: TimeUnit::best_for(timeout_of(&item.action)),
             test: None,
         }
+    }
+
+    /// Stores freshly picked template pixels, leaving the region as the area to search.
+    pub fn apply_template(&mut self, target: ActionId, picked: Rect, png: Vec<u8>) -> bool {
+        if self.id != target {
+            return false;
+        }
+        let Action::WaitForImage { region, template_png, mode, .. } = &mut self.action else {
+            return false;
+        };
+        *template_png = png;
+        // A template picked on its own is meant to be found somewhere in the region.
+        *mode = if picked == *region { ImageMatchMode::Exact } else { ImageMatchMode::Search };
+        self.preview = None;
+        self.test = None;
+        true
     }
 
     /// Stores a freshly picked region, plus the template for actions that match on pixels.
@@ -158,15 +176,23 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         return;
     }
     let target = dialog.id;
-    let start_picker = std::mem::take(&mut dialog.request_region);
+    let purpose = if std::mem::take(&mut dialog.request_region) {
+        Some(region_picker::Purpose::Region)
+    } else if std::mem::take(&mut dialog.request_template) {
+        Some(region_picker::Purpose::Template)
+    } else {
+        None
+    };
     app.dialog = Some(dialog);
-    if start_picker {
-        app.pick_region(target);
+    if let Some(purpose) = purpose {
+        app.pick_region(target, purpose);
     }
 }
 
 fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services: &UiServices) {
-    let Dialog { action, capture_key, preview, request_region, switch, timeout_unit, .. } = dialog;
+    let Dialog {
+        action, capture_key, preview, request_region, request_template, switch, timeout_unit, ..
+    } = dialog;
     match action {
         Action::KeyDown { .. } | Action::KeyUp { .. } | Action::KeyPress { .. } => {
             key_fields(ui, action, capture_key);
@@ -251,7 +277,12 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             });
         }
         Action::WaitForImage { region, template_png, similarity, poll_ms, timeout_ms, mode } => {
-            region_rows(ui, region, request_region);
+            region_rows(
+                ui,
+                region,
+                request_region,
+                "Freeze the screen and drag the area to watch; it becomes the template too",
+            );
             row(ui, "Similarity", |ui| {
                 ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
             });
@@ -276,16 +307,37 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                     ImageMatchMode::Search => "Finds the template anywhere in the region",
                 });
             });
-            row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
+            row(ui, "Template", |ui| {
+                template_row(ui, ctx, template_png, preview);
+                if ui
+                    .add(Button::new("Capture template..."))
+                    .on_hover_text("Pick just the picture to look for, leaving the region as it is")
+                    .clicked()
+                {
+                    *request_template = true;
+                }
+            });
+            if let Some(Preview::Image(texture)) = preview {
+                let size = texture.size();
+                let fits = size[0] as i32 <= region.w && size[1] as i32 <= region.h;
+                if *mode == ImageMatchMode::Search && !fits {
+                    row(ui, "", |ui| {
+                        ui.colored_label(
+                            ui.visuals().error_fg_color,
+                            "Template is larger than the region, it can never be found",
+                        );
+                    });
+                }
+            }
         }
         Action::WaitForText { region, text, case_sensitive, match_mode, poll_ms, timeout_ms } => {
-            region_rows(ui, region, request_region);
+            region_rows(ui, region, request_region, "Freeze the screen and drag the region to read text in");
             text_match_rows(ui, "wait_text_match", text, "Ready", case_sensitive, match_mode);
             millis(ui, "Poll every", poll_ms);
             timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
         Action::ClickOnText { region, text, case_sensitive, match_mode, button, poll_ms, timeout_ms } => {
-            region_rows(ui, region, request_region);
+            region_rows(ui, region, request_region, "Freeze the screen and drag the region to read text in");
             text_match_rows(ui, "click_text_match", text, "Sign in", case_sensitive, match_mode);
             row(ui, "Button", |ui| {
                 combo(ui, "click_text_button", button, &MouseButton::ALL, |b| b.label().to_string());
@@ -361,7 +413,7 @@ fn position(ui: &mut egui::Ui, pos: &mut Option<Point>) {
     *pos = if at_cursor { None } else { Some(point) };
 }
 
-fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: &mut bool) {
+fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: &mut bool, hint: &str) {
     row(ui, "Region", |ui| {
         ui.add(DragValue::new(&mut region.x).prefix("x "));
         ui.add(DragValue::new(&mut region.y).prefix("y "));
@@ -369,11 +421,7 @@ fn region_rows(ui: &mut egui::Ui, region: &mut Rect, request: &mut bool) {
         ui.add(DragValue::new(&mut region.h).range(1..=32_768).prefix("h "));
     });
     row(ui, "", |ui| {
-        if ui
-            .add(Button::new("Capture region..."))
-            .on_hover_text("Freeze the screen and drag the region you want to watch")
-            .clicked()
-        {
+        if ui.add(Button::new("Capture region...")).on_hover_text(hint).clicked() {
             *request = true;
         }
     });

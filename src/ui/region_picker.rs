@@ -17,6 +17,7 @@ const MIN_DRAG: i32 = 4;
 pub struct Picker {
     /// Action whose open properties dialog receives the result.
     target: ActionId,
+    purpose: Purpose,
     /// The picked monitor in physical virtual-screen pixels.
     monitor: Rect,
     shot: Arc<RgbaImage>,
@@ -32,12 +33,22 @@ enum Outcome {
     Cancelled,
 }
 
+/// What the picked rectangle is used for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Purpose {
+    /// The watched region, which for an image wait also becomes the template.
+    Region,
+    /// Only the pixels to look for, leaving the region as the area to search.
+    Template,
+}
+
 /// Screenshots the monitor under the mouse and arms the picker for the given action.
-pub fn open(app: &mut App, target: ActionId) {
+pub fn open(app: &mut App, target: ActionId, purpose: Purpose) {
     match capture_monitor(app.services.capture.as_ref()) {
         Ok((monitor, shot)) => {
             app.region_picker = Some(Picker {
                 target,
+                purpose,
                 monitor,
                 shot: Arc::new(shot),
                 texture: None,
@@ -79,13 +90,16 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         Outcome::Cancelled => app.info("Region picking cancelled"),
         Outcome::Confirmed(region) => match encode_crop(&picker.shot, picker.monitor, region) {
             Ok(png) => {
-                let applied =
-                    app.dialog.as_mut().is_some_and(|dialog| dialog.apply_region(picker.target, region, png));
+                let applied = app.dialog.as_mut().is_some_and(|dialog| match picker.purpose {
+                    Purpose::Region => dialog.apply_region(picker.target, region, png),
+                    Purpose::Template => dialog.apply_template(picker.target, region, png),
+                });
                 if applied {
-                    app.info(format!(
-                        "Captured {} x {} px at {}, {}",
-                        region.w, region.h, region.x, region.y
-                    ));
+                    let what = match picker.purpose {
+                        Purpose::Region => "Captured",
+                        Purpose::Template => "Template",
+                    };
+                    app.info(format!("{what} {} x {} px at {}, {}", region.w, region.h, region.x, region.y));
                 } else {
                     app.error("The properties dialog closed before the region arrived");
                 }
