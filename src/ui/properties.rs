@@ -90,9 +90,12 @@ impl Dialog {
         match &mut self.action {
             Action::WaitForImage { region, template_png, mode, .. } => {
                 *region = picked;
-                *template_png = png;
-                *mode = ImageMatchMode::Exact;
-                self.preview = None;
+                // While searching the region is only the area to look in, so the template stays.
+                if *mode != ImageMatchMode::Search {
+                    *template_png = png;
+                    self.preview = None;
+                    self.test = None;
+                }
                 true
             }
             Action::WaitForText { region, .. } | Action::ClickOnText { region, .. } => {
@@ -136,9 +139,6 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
                 });
             },
         );
-        if matches!(dialog.action, Action::WaitForImage { .. }) {
-            template_preview(ui, &dialog.preview);
-        }
 
         ui.add_space(12.0);
         ui.separator();
@@ -277,50 +277,43 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             });
         }
         Action::WaitForImage { region, template_png, similarity, poll_ms, timeout_ms, mode } => {
-            region_rows(
-                ui,
-                region,
-                request_region,
-                "Freeze the screen and drag the area to watch; it becomes the template too",
-            );
-            row(ui, "Similarity", |ui| {
-                ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
-            });
-            millis(ui, "Poll every", poll_ms);
-            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
+            ensure_preview(ctx, template_png, preview);
             row(ui, "Mode", |ui| {
                 let modes = [ImageMatchMode::Exact, ImageMatchMode::Search];
                 combo(ui, "image_mode", mode, &modes, |m| match m {
-                    ImageMatchMode::Exact => "Exact region".into(),
+                    ImageMatchMode::Exact => "Match entire region".into(),
                     ImageMatchMode::Search => "Search in region".into(),
                 })
                 .on_hover_text(
-                    "Exact region: the template must have the region's size and sit in the same \
+                    "Match entire region: the template has the region's size and sits in the same \
                      place, compared pixel by pixel.\n\
                      Search in region: a smaller template is looked for anywhere inside the \
                      region, tolerating brightness changes but needing some contrast.",
                 );
             });
-            row(ui, "", |ui| {
-                ui.weak(match mode {
-                    ImageMatchMode::Exact => "Compares the whole region, it may not move",
-                    ImageMatchMode::Search => "Finds the template anywhere in the region",
+            let searching = *mode == ImageMatchMode::Search;
+            region_rows(
+                ui,
+                region,
+                request_region,
+                if searching {
+                    "Freeze the screen and drag the area to search in"
+                } else {
+                    "Freeze the screen and drag the area to watch; it becomes the template too"
+                },
+            );
+            if searching {
+                row(ui, "Template", |ui| {
+                    if ui
+                        .add(Button::new("Capture template..."))
+                        .on_hover_text("Pick just the picture to look for, leaving the region as it is")
+                        .clicked()
+                    {
+                        *request_template = true;
+                    }
+                    template_size(ui, template_png, preview);
                 });
-            });
-            row(ui, "Template", |ui| {
-                template_row(ui, ctx, template_png, preview);
-                if ui
-                    .add(Button::new("Capture template..."))
-                    .on_hover_text("Pick just the picture to look for, leaving the region as it is")
-                    .clicked()
-                {
-                    *request_template = true;
-                }
-            });
-            if let Some(Preview::Image(texture)) = preview {
-                let size = texture.size();
-                let fits = size[0] as i32 <= region.w && size[1] as i32 <= region.h;
-                if *mode == ImageMatchMode::Search && !fits {
+                if template_bigger_than(region, preview) {
                     row(ui, "", |ui| {
                         ui.colored_label(
                             ui.visuals().error_fg_color,
@@ -329,6 +322,14 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                     });
                 }
             }
+            // The same picture either way: the region shot when matching it whole, the
+            // template when searching for it.
+            preview_row(ui, preview);
+            row(ui, "Similarity", |ui| {
+                ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
+            });
+            millis(ui, "Poll every", poll_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
         Action::WaitForText { region, text, case_sensitive, match_mode, poll_ms, timeout_ms } => {
             region_rows(ui, region, request_region, "Freeze the screen and drag the region to read text in");
@@ -558,9 +559,10 @@ fn foreground_button(
 }
 
 /// Template row inside the field grid: only text, since a grid row does not grow for an image.
-fn template_row(ui: &mut egui::Ui, ctx: &egui::Context, png: &[u8], preview: &mut Option<Preview>) {
+/// Decodes the template once, so the size text and the picture can both use it.
+fn ensure_preview(ctx: &egui::Context, png: &[u8], preview: &mut Option<Preview>) {
     if png.is_empty() {
-        ui.weak("No template captured yet");
+        *preview = None;
         return;
     }
     if preview.is_none() {
@@ -569,27 +571,45 @@ fn template_row(ui: &mut egui::Ui, ctx: &egui::Context, png: &[u8], preview: &mu
             None => Preview::Failed,
         });
     }
+}
+
+/// Size of the captured template, or why there is none to show.
+fn template_size(ui: &mut egui::Ui, png: &[u8], preview: &Option<Preview>) {
+    if png.is_empty() {
+        ui.weak("none captured yet");
+        return;
+    }
     match preview {
         Some(Preview::Image(texture)) => {
             let size = texture.size();
             ui.weak(format!("{} x {} px", size[0], size[1]));
         }
         _ => {
-            ui.colored_label(ui.visuals().error_fg_color, "Template image cannot be decoded");
+            ui.colored_label(ui.visuals().error_fg_color, "cannot be decoded");
         }
     }
 }
 
-/// Scaled template picture, drawn under the field grid where it has room to breathe.
-fn template_preview(ui: &mut egui::Ui, preview: &Option<Preview>) {
+/// True when the template cannot possibly fit inside the region.
+fn template_bigger_than(region: &Rect, preview: &Option<Preview>) -> bool {
+    let Some(Preview::Image(texture)) = preview else {
+        return false;
+    };
+    let size = texture.size();
+    size[0] as i32 > region.w || size[1] as i32 > region.h
+}
+
+/// Scaled picture of the template in the value column of the field grid.
+fn preview_row(ui: &mut egui::Ui, preview: &Option<Preview>) {
     let Some(Preview::Image(texture)) = preview else {
         return;
     };
     let sized = egui::load::SizedTexture::from_handle(texture);
     let scale = (240.0 / sized.size.x).min(150.0 / sized.size.y).min(1.0);
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.add_space(118.0);
+    ui.label("");
+    // Laid out top down rather than through `row`, whose horizontal layout centres its
+    // contents vertically and would push a tall picture over the rows around it.
+    ui.vertical(|ui| {
         egui::Frame::new()
             .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
             .corner_radius(4)
@@ -598,6 +618,7 @@ fn template_preview(ui: &mut egui::Ui, preview: &Option<Preview>) {
                 ui.add(egui::Image::new(sized).fit_to_exact_size(sized.size * scale));
             });
     });
+    ui.end_row();
 }
 
 fn decode(ctx: &egui::Context, png: &[u8]) -> Option<egui::TextureHandle> {
@@ -642,7 +663,7 @@ fn timeout_row(ui: &mut egui::Ui, id: &str, millis: &mut u32, unit: &mut TimeUni
         }
     });
     row(ui, "", |ui| {
-        ui.weak("Running out fails the action and stops playback, 0 waits forever").on_hover_text(
+        ui.weak("Running out stops playback, 0 waits forever").on_hover_text(
             "Playback has no way to skip a wait that never finishes: when the timeout \
                  expires the run ends with an error naming this action.",
         );
@@ -686,7 +707,7 @@ fn run_test(action: &Action, services: &UiServices) -> TestOutcome {
         return TestOutcome::Failed("not an image wait".into());
     };
     if template_png.is_empty() {
-        return TestOutcome::Failed("capture a region first".into());
+        return TestOutcome::Failed("capture a region or template first".into());
     }
     let template = match image::load_from_memory(template_png) {
         Ok(image) => image.to_rgba8(),
