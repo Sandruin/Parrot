@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use egui::{Button, DragValue, Modal, RichText, Slider, TextEdit, Vec2};
 
 use super::{App, UiServices, action_list, keymap, style};
+use crate::engine::matcher;
 use crate::model::{
     Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
     TextMatch, TextMode, TimeUnit,
@@ -22,6 +23,16 @@ pub struct Dialog {
     /// Set by the "Capture region..." button, consumed once the modal has been laid out.
     request_region: bool,
     switch: Switch,
+    /// Unit the timeout is shown in; the action itself always stores milliseconds.
+    timeout_unit: TimeUnit,
+    /// Result of the last template test, shown next to the button.
+    test: Option<TestOutcome>,
+}
+
+/// What testing the template against the screen right now produced.
+enum TestOutcome {
+    Scored { matched: bool, score: f32, threshold: f32 },
+    Failed(String),
 }
 
 /// State of the "Use current foreground" countdown.
@@ -48,6 +59,8 @@ impl Dialog {
             preview: None,
             request_region: false,
             switch: Switch::default(),
+            timeout_unit: TimeUnit::best_for(timeout_of(&item.action)),
+            test: None,
         }
     }
 
@@ -112,16 +125,21 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
         ui.add_space(12.0);
         ui.separator();
         ui.horizontal(|ui| {
-            let accent = style::accent(ui.visuals());
-            let ok = Button::new(RichText::new("OK").color(egui::Color32::WHITE))
-                .fill(accent)
-                .min_size(Vec2::new(76.0, 0.0));
-            if ui.add(ok).clicked() {
-                commit = true;
+            if matches!(dialog.action, Action::WaitForImage { .. }) {
+                test_button(ui, &mut dialog, &services);
             }
-            if ui.add(Button::new("Cancel").min_size(Vec2::new(76.0, 0.0))).clicked() {
-                cancel = true;
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(Button::new("Cancel").min_size(Vec2::new(76.0, 0.0))).clicked() {
+                    cancel = true;
+                }
+                let accent = style::accent(ui.visuals());
+                let ok = Button::new(RichText::new("OK").color(egui::Color32::WHITE))
+                    .fill(accent)
+                    .min_size(Vec2::new(76.0, 0.0));
+                if ui.add(ok).clicked() {
+                    commit = true;
+                }
+            });
         });
     });
 
@@ -148,7 +166,7 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
 }
 
 fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services: &UiServices) {
-    let Dialog { action, capture_key, preview, request_region, switch, .. } = dialog;
+    let Dialog { action, capture_key, preview, request_region, switch, timeout_unit, .. } = dialog;
     match action {
         Action::KeyDown { .. } | Action::KeyUp { .. } | Action::KeyPress { .. } => {
             key_fields(ui, action, capture_key);
@@ -227,7 +245,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             row(ui, "Process name", |ui| {
                 ui.add(TextEdit::singleline(process_name).hint_text("notepad.exe").desired_width(280.0));
             });
-            millis(ui, "Timeout", timeout_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
             row(ui, "", |ui| {
                 foreground_button(ui, ctx, title_contains, process_name, switch, services);
             });
@@ -238,12 +256,24 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                 ui.add(Slider::new(similarity, 0.5..=1.0).fixed_decimals(2));
             });
             millis(ui, "Poll every", poll_ms);
-            millis(ui, "Timeout", timeout_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
             row(ui, "Mode", |ui| {
                 let modes = [ImageMatchMode::Exact, ImageMatchMode::Search];
                 combo(ui, "image_mode", mode, &modes, |m| match m {
                     ImageMatchMode::Exact => "Exact region".into(),
                     ImageMatchMode::Search => "Search in region".into(),
+                })
+                .on_hover_text(
+                    "Exact region: the template must have the region's size and sit in the same \
+                     place, compared pixel by pixel.\n\
+                     Search in region: a smaller template is looked for anywhere inside the \
+                     region, tolerating brightness changes but needing some contrast.",
+                );
+            });
+            row(ui, "", |ui| {
+                ui.weak(match mode {
+                    ImageMatchMode::Exact => "Compares the whole region, it may not move",
+                    ImageMatchMode::Search => "Finds the template anywhere in the region",
                 });
             });
             row(ui, "Template", |ui| template_row(ui, ctx, template_png, preview));
@@ -252,7 +282,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             region_rows(ui, region, request_region);
             text_match_rows(ui, "wait_text_match", text, "Ready", case_sensitive, match_mode);
             millis(ui, "Poll every", poll_ms);
-            millis(ui, "Timeout", timeout_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
         Action::ClickOnText { region, text, case_sensitive, match_mode, button, poll_ms, timeout_ms } => {
             region_rows(ui, region, request_region);
@@ -261,7 +291,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                 combo(ui, "click_text_button", button, &MouseButton::ALL, |b| b.label().to_string());
             });
             millis(ui, "Poll every", poll_ms);
-            millis(ui, "Timeout", timeout_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
         Action::MouseMoveRelative { steps, scale } => relative_rows(ui, steps, scale),
         Action::WaitForFile { path, timeout_ms } => {
@@ -279,7 +309,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             row(ui, "", |ui| {
                 ui.weak("Wildcards * and ? match any file in the folder");
             });
-            millis(ui, "Timeout", timeout_ms);
+            timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
         Action::Comment { text } => {
             row(ui, "Text", |ui| {
@@ -535,6 +565,105 @@ fn millis(ui: &mut egui::Ui, label: &str, value: &mut u32) {
     });
 }
 
+/// Timeout of an action that waits, edited in the unit the user picked.
+fn timeout_row(ui: &mut egui::Ui, id: &str, millis: &mut u32, unit: &mut TimeUnit) {
+    row(ui, "Timeout", |ui| {
+        let mut shown = unit.from_millis(*millis as f64);
+        let speed = match unit {
+            TimeUnit::Ms => 10.0,
+            TimeUnit::S => 0.1,
+            TimeUnit::Min => 0.01,
+        };
+        let drag = ui.add(
+            DragValue::new(&mut shown)
+                .range(0.0..=unit.from_millis(3_600_000.0))
+                .speed(speed)
+                // egui derives the decimals from the drag speed, which would show 10 s as 10.00.
+                .custom_formatter(|value, _| {
+                    format!("{value:.3}").trim_end_matches('0').trim_end_matches('.').to_string()
+                }),
+        );
+        if drag.changed() {
+            *millis = unit.to_millis(shown).round().clamp(0.0, 3_600_000.0) as u32;
+        }
+        let before = *unit;
+        combo(ui, id, unit, &TimeUnit::ALL, |u| u.label().to_string());
+        if *unit != before {
+            // Keep the duration, only change how it reads.
+            *millis = before.to_millis(shown).round().clamp(0.0, 3_600_000.0) as u32;
+        }
+    });
+    row(ui, "", |ui| {
+        ui.weak("Running out fails the action and stops playback, 0 waits forever").on_hover_text(
+            "Playback has no way to skip a wait that never finishes: when the timeout \
+                 expires the run ends with an error naming this action.",
+        );
+    });
+}
+
+/// "Test now" button plus the score of the last run, green when it would match.
+fn test_button(ui: &mut egui::Ui, dialog: &mut Dialog, services: &UiServices) {
+    if ui
+        .add(Button::new("Test now").min_size(Vec2::new(84.0, 0.0)))
+        .on_hover_text(
+            "Capture the region right now and score it against the template with the settings \
+             above. Move this window off the region first, it is captured like any other pixels.",
+        )
+        .clicked()
+    {
+        dialog.test = Some(run_test(&dialog.action, services));
+    }
+    match &dialog.test {
+        Some(TestOutcome::Scored { matched, score, threshold }) => {
+            let (color, verdict) = if *matched {
+                (style::play_green(ui.visuals()), "match")
+            } else {
+                (style::record_red(ui.visuals()), "no match")
+            };
+            ui.colored_label(
+                color,
+                format!("{:.1}% of {:.0}% needed, {verdict}", score * 100.0, threshold * 100.0),
+            );
+        }
+        Some(TestOutcome::Failed(message)) => {
+            ui.colored_label(ui.visuals().error_fg_color, message);
+        }
+        None => {}
+    }
+}
+
+/// Captures the region and scores it exactly the way playback would.
+fn run_test(action: &Action, services: &UiServices) -> TestOutcome {
+    let Action::WaitForImage { region, template_png, similarity, mode, .. } = action else {
+        return TestOutcome::Failed("not an image wait".into());
+    };
+    if template_png.is_empty() {
+        return TestOutcome::Failed("capture a region first".into());
+    }
+    let template = match image::load_from_memory(template_png) {
+        Ok(image) => image.to_rgba8(),
+        Err(e) => return TestOutcome::Failed(format!("template: {e}")),
+    };
+    let shot = match services.capture.capture(*region) {
+        Ok(shot) => shot,
+        Err(e) => return TestOutcome::Failed(format!("capture: {e:#}")),
+    };
+    let (matched, score) = matcher::evaluate(*mode, &shot, &template, *similarity);
+    TestOutcome::Scored { matched, score, threshold: *similarity }
+}
+
+/// Timeout in milliseconds of the actions that wait, for picking the display unit.
+fn timeout_of(action: &Action) -> u32 {
+    match action {
+        Action::WindowActivate { timeout_ms, .. }
+        | Action::WaitForImage { timeout_ms, .. }
+        | Action::WaitForText { timeout_ms, .. }
+        | Action::ClickOnText { timeout_ms, .. }
+        | Action::WaitForFile { timeout_ms, .. } => *timeout_ms,
+        _ => 0,
+    }
+}
+
 fn row(ui: &mut egui::Ui, label: &str, contents: impl FnOnce(&mut egui::Ui)) {
     if label.is_empty() {
         ui.label("");
@@ -551,12 +680,15 @@ fn combo<T: Copy + PartialEq>(
     value: &mut T,
     options: &[T],
     label: impl Fn(T) -> String,
-) {
-    egui::ComboBox::from_id_salt(id).selected_text(label(*value)).show_ui(ui, |ui| {
-        for option in options {
-            ui.selectable_value(value, *option, label(*option));
-        }
-    });
+) -> egui::Response {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label(*value))
+        .show_ui(ui, |ui| {
+            for option in options {
+                ui.selectable_value(value, *option, label(*option));
+            }
+        })
+        .response
 }
 
 fn key_of(action: &Action) -> Option<Key> {

@@ -94,6 +94,26 @@ impl TimeUnit {
             TimeUnit::Min => duration * 60_000.0,
         }
     }
+
+    /// The same duration expressed in this unit.
+    pub fn from_millis(self, millis: f64) -> f64 {
+        match self {
+            TimeUnit::Ms => millis,
+            TimeUnit::S => millis / 1_000.0,
+            TimeUnit::Min => millis / 60_000.0,
+        }
+    }
+
+    /// Largest unit that shows `millis` without a fraction, so 10000 reads as 10 s.
+    pub fn best_for(millis: u32) -> TimeUnit {
+        if millis > 0 && millis.is_multiple_of(60_000) {
+            TimeUnit::Min
+        } else if millis > 0 && millis.is_multiple_of(1_000) {
+            TimeUnit::S
+        } else {
+            TimeUnit::Ms
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
