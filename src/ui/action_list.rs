@@ -9,19 +9,26 @@ const ROW_HEIGHT: f32 = 26.0;
 const W_DRAG: f32 = 20.0;
 const W_ENABLED: f32 = 24.0;
 const W_INDEX: f32 = 34.0;
-const W_ACTION: f32 = 168.0;
-const W_COMMENT: f32 = 190.0;
+const MIN_ACTION: f32 = 90.0;
+const MIN_COMMENT: f32 = 60.0;
+const MIN_VALUE: f32 = 110.0;
 
-/// Width of the value column, which takes whatever the fixed columns leave.
-fn value_width(total: f32, spacing: f32) -> f32 {
-    let fixed = W_DRAG + W_ENABLED + W_INDEX + W_ACTION + W_COMMENT + 5.0 * spacing;
-    (total - fixed).max(110.0)
+/// Width of the value column, which takes whatever the other columns leave.
+fn value_width(total: f32, spacing: f32, action: f32, comment: f32) -> f32 {
+    let fixed = W_DRAG + W_ENABLED + W_INDEX + action + comment + 5.0 * spacing;
+    (total - fixed).max(MIN_VALUE)
+}
+
+/// Largest width a draggable column may take before the value column hits its minimum.
+fn max_width(total: f32, spacing: f32, other: f32) -> f32 {
+    let fixed = W_DRAG + W_ENABLED + W_INDEX + other + MIN_VALUE + 5.0 * spacing;
+    (total - fixed).max(MIN_ACTION)
 }
 
 /// Central action list: header, rows with drag reorder, selection and inline comment editing.
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     shortcuts(app, ui.ctx());
-    header(ui);
+    header(app, ui);
 
     if app.doc.items.is_empty() {
         ui.centered_and_justified(|ui| {
@@ -39,6 +46,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let running_tint = style::play_green(ui.visuals());
 
     let can_paste = app.can_paste();
+    let action_w = app.settings.columns.action;
+    let comment_w = app.settings.columns.comment;
     let mut clicked = None;
     let mut open = None;
     let mut edit_comment = None;
@@ -48,7 +57,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let mods = ui.input(|i| i.modifiers);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let spacing = ui.spacing().item_spacing.x;
-        let value_w = value_width(ui.available_width(), spacing);
+        let value_w = value_width(ui.available_width(), spacing, action_w, comment_w);
         let response =
             egui_dnd::dnd(ui, "actions").show_vec(&mut app.doc.items, |ui, item, handle, state| {
                 let is_selected = selection.contains(&item.id);
@@ -113,7 +122,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                             .color(ui.visuals().weak_text_color()),
                     );
                 });
-                cell(ui, W_ACTION, row_h, |ui| {
+                cell(ui, action_w, row_h, |ui| {
                     let tint = if dim { ui.visuals().weak_text_color() } else { accent };
                     ui.label(icon_for(&item.action).rich_text().size(15.0).color(tint));
                     label(ui, item.action.kind_name(), dim, true);
@@ -121,7 +130,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 cell(ui, value_w, row_h, |ui| label(ui, item.action.value_text(), dim, false));
 
                 let (comment_rect, comment_response) =
-                    ui.allocate_exact_size(Vec2::new(W_COMMENT, row_h), Sense::click());
+                    ui.allocate_exact_size(Vec2::new(comment_w, row_h), Sense::click());
                 let mut comment_ui = ui.new_child(
                     UiBuilder::new().max_rect(comment_rect).layout(Layout::left_to_right(Align::Center)),
                 );
@@ -246,31 +255,81 @@ enum RowCommand {
     Properties,
 }
 
-fn header(ui: &mut egui::Ui) {
+/// Column titles plus the two dividers that resize the action and comment columns.
+fn header(app: &mut App, ui: &mut egui::Ui) {
     let spacing = ui.spacing().item_spacing.x;
-    let value_w = value_width(ui.available_width(), spacing);
-    ui.horizontal(|ui| {
-        ui.add_space(6.0);
-        let columns = [
-            (W_DRAG, ""),
-            (W_ENABLED, ""),
-            (W_INDEX, ""),
-            (W_ACTION, "Action"),
-            (value_w, "Value"),
-            (W_COMMENT, "Comment"),
-        ];
-        for (width, text) in columns {
-            cell(ui, width, 18.0, |ui| {
-                if !text.is_empty() {
-                    ui.label(
-                        RichText::new(text).font(style::medium(12.0)).color(ui.visuals().weak_text_color()),
-                    );
+    let total = ui.available_width();
+    let widths = app.settings.columns;
+    let value_w = value_width(total, spacing, widths.action, widths.comment);
+
+    let mut edges = Vec::new();
+    let response = ui
+        .horizontal(|ui| {
+            ui.add_space(6.0);
+            let columns = [
+                (W_DRAG, ""),
+                (W_ENABLED, ""),
+                (W_INDEX, ""),
+                (widths.action, "Action"),
+                (value_w, "Value"),
+                (widths.comment, "Comment"),
+            ];
+            for (index, (width, text)) in columns.into_iter().enumerate() {
+                cell(ui, width, 18.0, |ui| {
+                    if !text.is_empty() {
+                        ui.label(
+                            RichText::new(text)
+                                .font(style::medium(12.0))
+                                .color(ui.visuals().weak_text_color()),
+                        );
+                    }
+                });
+                if index == 3 || index == 4 {
+                    edges.push(ui.cursor().left() - spacing * 0.5);
                 }
-            });
-        }
-    });
+            }
+        })
+        .response;
+
+    let rows = response.rect.y_range();
+    let action_drag = divider(ui, egui::Id::new("col_action"), edges[0], rows);
+    let comment_drag = divider(ui, egui::Id::new("col_comment"), edges[1], rows);
+
+    let columns = &mut app.settings.columns;
+    let action_delta = action_drag.drag_delta().x;
+    let comment_delta = comment_drag.drag_delta().x;
+    if action_delta != 0.0 {
+        let limit = max_width(total, spacing, columns.comment);
+        columns.action = (columns.action + action_delta).clamp(MIN_ACTION, limit);
+    }
+    if comment_delta != 0.0 {
+        let limit = max_width(total, spacing, columns.action);
+        columns.comment = (columns.comment - comment_delta).clamp(MIN_COMMENT, limit);
+    }
+    if (action_drag.drag_stopped() || comment_drag.drag_stopped())
+        && let Err(e) = app.settings.save_default()
+    {
+        log::warn!("cannot save settings: {e:#}");
+    }
+
     ui.add_space(2.0);
     ui.separator();
+}
+
+/// Vertical grab handle between two columns.
+fn divider(ui: &mut egui::Ui, id: egui::Id, x: f32, rows: egui::Rangef) -> egui::Response {
+    let rect = Rect::from_x_y_ranges((x - 4.0)..=(x + 4.0), rows);
+    let response = ui
+        .interact(rect, id, Sense::drag())
+        .on_hover_and_drag_cursor(egui::CursorIcon::ResizeColumn)
+        .on_hover_text("Drag to resize, the value column takes the rest");
+    let stroke = if response.hovered() || response.dragged() {
+        egui::Stroke::new(2.0, style::accent(ui.visuals()))
+    } else {
+        egui::Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.5))
+    };
+    ui.painter().vline(x, rows, stroke);
+    response
 }
 
 fn comment_edit_id(id: ActionId) -> egui::Id {

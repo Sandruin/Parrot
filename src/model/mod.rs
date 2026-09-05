@@ -18,4 +18,4 @@ pub use messages::{
     EngineCommand, EngineEvent, OverlayScene, OverlayShape, PlaybackOutcome, PlayerControl, RawInputEvent,
     RecordOptions, Win32Command,
 };
-pub use settings::AppSettings;
+pub use settings::{AppSettings, ColumnWidths};

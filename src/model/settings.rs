@@ -7,6 +7,20 @@ use super::{HotkeyConfig, RecordOptions};
 
 const MAX_RECENT: usize = 10;
 
+/// Widths of the action list columns the user can drag; the value column takes what is left.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(default)]
+pub struct ColumnWidths {
+    pub action: f32,
+    pub comment: f32,
+}
+
+impl Default for ColumnWidths {
+    fn default() -> Self {
+        Self { action: 168.0, comment: 250.0 }
+    }
+}
+
 /// Per-user application settings persisted in the config directory.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
@@ -16,6 +30,7 @@ pub struct AppSettings {
     pub recent_files: Vec<PathBuf>,
     /// Draw the overlay when an action is selected in the list.
     pub show_overlay: bool,
+    pub columns: ColumnWidths,
 }
 
 impl Default for AppSettings {
@@ -25,6 +40,7 @@ impl Default for AppSettings {
             record: RecordOptions::default(),
             recent_files: Vec::new(),
             show_overlay: true,
+            columns: ColumnWidths::default(),
         }
     }
 }
