@@ -36,6 +36,14 @@ Macros are saved to `Documents/Parrot` by default; the folder is created on firs
 
 Requires Rust 1.95 or newer. On Windows the build embeds a per-monitor DPI manifest so coordinates are physical pixels everywhere.
 
+## Install
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\install.ps1
+```
+
+Copies the release binary to `%LOCALAPPDATA%\Programs\Parrot`, adds a start menu entry so searching for "Parrot" finds it, and registers an uninstall entry under Installed apps. No administrator rights needed, and it builds the binary first if it is missing. `-Force` replaces a running instance, `-Uninstall` removes everything except your macros and settings.
+
 ## Caveats
 
 - Keys typed while the recorder itself has focus are not recorded, a Windows limitation; click into the program you are automating. Mouse input and the hotkeys are unaffected, and the status bar says so while recording.
@@ -49,6 +57,7 @@ Requires Rust 1.95 or newer. On Windows the build embeds a per-monitor DPI manif
 - `src/ui` egui application
 - `examples/` small binaries for smoke testing hooks, injection, OCR and the overlay
 - `scripts/screenshot.ps1` launches the app and captures its window
+- `scripts/install.ps1` installs into the start menu for the current user
 
 ## Development
 
