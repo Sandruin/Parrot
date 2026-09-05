@@ -4,6 +4,8 @@
 
 A small desktop macro recorder for Windows, written in Rust with egui. Record keyboard and mouse input, edit the resulting action list, and replay it into games and desktop apps. Built for personal automation: sandbox games and repetitive workflows.
 
+<br clear="all"><br>
+
 ![Parrot with a demo macro loaded](docs/screenshot.png)
 
 ## Features
