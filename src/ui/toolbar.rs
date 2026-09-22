@@ -167,12 +167,17 @@ fn mouse_items(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     if ui.button("Move").clicked() {
-        app.add_action(Action::MouseMove { path: vec![PathPoint::default()] });
+        app.add_action(Action::MouseMove {
+            path: vec![PathPoint::default()],
+            relative: false,
+            time_scale: 1.0,
+        });
     }
     if ui.button("Move (relative)").on_hover_text("Cursor deltas for games that read raw input").clicked() {
-        app.add_action(Action::MouseMoveRelative {
-            steps: vec![PathPoint { x: 100, y: 0, dt_ms: 0 }],
-            scale: 1.0,
+        app.add_action(Action::MouseMove {
+            path: vec![PathPoint { x: 100, y: 0, dt_ms: 0 }],
+            relative: true,
+            time_scale: 1.0,
         });
     }
     if ui.button("Wheel").clicked() {

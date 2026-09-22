@@ -50,10 +50,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
 
         if let Some(progress) = app.progress {
+            // Kept after a run ends, so the last step and iteration stay readable.
+            let finished = app.mode != Mode::Playing;
             ui.separator();
-            ui.label(format!("{} / {}", progress.index + 1, progress.total));
-            if progress.iteration > 1 {
-                ui.label(format!("iteration {}", progress.iteration));
+            let position = format!("{} / {}", progress.index + 1, progress.total);
+            let text = if finished { format!("last {position}") } else { position };
+            ui.label(RichText::new(text).color(if finished {
+                ui.visuals().weak_text_color()
+            } else {
+                ui.visuals().text_color()
+            }));
+            if finished || progress.iteration > 1 {
+                ui.label(
+                    RichText::new(format!("iteration {}", progress.iteration))
+                        .color(ui.visuals().weak_text_color()),
+                );
             }
         }
 

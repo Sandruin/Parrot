@@ -282,7 +282,11 @@ fn mouse_paths_follow_the_path_mode() {
     ];
     let recorded = Harness::new();
     assert_eq!(
-        recorded.run(&macro_of(vec![Action::MouseMove { path: path.clone() }])),
+        recorded.run(&macro_of(vec![Action::MouseMove {
+            path: path.clone(),
+            relative: false,
+            time_scale: 1.0
+        }])),
         PlaybackOutcome::Completed
     );
     assert_eq!(
@@ -298,7 +302,8 @@ fn mouse_paths_follow_the_path_mode() {
     let straight = Harness::new();
     let settings = MacroSettings { mouse_path: MousePathMode::Straight, ..Default::default() };
     assert_eq!(
-        straight.run(&macro_with(settings, vec![Action::MouseMove { path }])),
+        straight
+            .run(&macro_with(settings, vec![Action::MouseMove { path, relative: false, time_scale: 1.0 }])),
         PlaybackOutcome::Completed
     );
     assert_eq!(straight.calls(), vec![InjectedCall::MoveAbs(Point::new(20, 20))]);
@@ -675,7 +680,7 @@ fn an_invalid_glob_pattern_fails_without_waiting() {
 }
 
 #[test]
-fn relative_moves_scale_and_carry_the_rounding_remainder() {
+fn relative_moves_send_deltas_and_honour_the_time_scale() {
     let steps = vec![
         PathPoint { x: 1, y: 1, dt_ms: 0 },
         PathPoint { x: 1, y: 1, dt_ms: 10 },
@@ -683,49 +688,31 @@ fn relative_moves_scale_and_carry_the_rounding_remainder() {
         PathPoint { x: 1, y: 1, dt_ms: 10 },
     ];
     let plain = Harness::new();
-    let m = macro_of(vec![Action::MouseMoveRelative { steps: steps.clone(), scale: 1.0 }]);
+    let m = macro_of(vec![Action::MouseMove { path: steps.clone(), relative: true, time_scale: 1.0 }]);
     assert_eq!(plain.run(&m), PlaybackOutcome::Completed);
     assert_eq!(plain.calls(), vec![InjectedCall::MoveRel { dx: 1, dy: 1 }; 4]);
     assert_eq!(plain.sleeper.total_slept(), Duration::from_millis(30));
     assert_eq!(plain.injector.cursor_pos().unwrap(), Point::new(4, 4));
 
-    let scaled = Harness::new();
-    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 1.5 }]);
-    assert_eq!(scaled.run(&m), PlaybackOutcome::Completed);
-    assert_eq!(
-        scaled.calls(),
-        vec![
-            InjectedCall::MoveRel { dx: 2, dy: 2 },
-            InjectedCall::MoveRel { dx: 1, dy: 1 },
-            InjectedCall::MoveRel { dx: 2, dy: 2 },
-            InjectedCall::MoveRel { dx: 1, dy: 1 },
-        ]
-    );
-    assert_eq!(scaled.injector.cursor_pos().unwrap(), Point::new(6, 6));
+    let quick = Harness::new();
+    let m = macro_of(vec![Action::MouseMove { path: steps, relative: true, time_scale: 2.0 }]);
+    assert_eq!(quick.run(&m), PlaybackOutcome::Completed);
+    assert_eq!(quick.calls(), vec![InjectedCall::MoveRel { dx: 1, dy: 1 }; 4]);
+    assert_eq!(quick.sleeper.total_slept(), Duration::from_millis(15));
 }
 
 #[test]
-fn relative_steps_that_round_to_nothing_are_skipped() {
+fn relative_steps_without_movement_are_skipped() {
     let h = Harness::new();
     let steps = vec![
         PathPoint { x: 0, y: 0, dt_ms: 0 },
         PathPoint { x: 0, y: 0, dt_ms: 15 },
         PathPoint { x: -3, y: 4, dt_ms: 15 },
     ];
-    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 1.0 }]);
+    let m = macro_of(vec![Action::MouseMove { path: steps, relative: true, time_scale: 1.0 }]);
     assert_eq!(h.run(&m), PlaybackOutcome::Completed);
     assert_eq!(h.calls(), vec![InjectedCall::MoveRel { dx: -3, dy: 4 }]);
     assert_eq!(h.sleeper.total_slept(), Duration::from_millis(30));
-
-    let small = Harness::new();
-    let steps = vec![
-        PathPoint { x: 1, y: 0, dt_ms: 0 },
-        PathPoint { x: 1, y: 0, dt_ms: 5 },
-        PathPoint { x: 1, y: 0, dt_ms: 5 },
-    ];
-    let m = macro_of(vec![Action::MouseMoveRelative { steps, scale: 0.4 }]);
-    assert_eq!(small.run(&m), PlaybackOutcome::Completed);
-    assert_eq!(small.calls(), vec![InjectedCall::MoveRel { dx: 1, dy: 0 }]);
 }
 
 /// Injector with a keyboard layout, so scan-code typing and its fallback are both exercised.

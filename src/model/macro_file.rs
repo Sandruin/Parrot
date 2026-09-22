@@ -7,7 +7,29 @@ use serde::{Deserialize, Serialize};
 use super::{Action, ActionId, ActionItem};
 
 /// Format version written into every macro file; bump when the schema changes.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
+
+/// Rewrites the `mouse_move_relative` actions of version 1 files into the merged
+/// `mouse_move`, whose spatial scale became a time scale.
+fn merge_relative_moves(value: &mut serde_json::Value) {
+    let Some(items) = value.get_mut("items").and_then(serde_json::Value::as_array_mut) else {
+        return;
+    };
+    for item in items {
+        let Some(action) = item.get_mut("action").and_then(serde_json::Value::as_object_mut) else {
+            continue;
+        };
+        if action.get("type").and_then(serde_json::Value::as_str) != Some("mouse_move_relative") {
+            continue;
+        }
+        action.insert("type".into(), serde_json::Value::from("mouse_move"));
+        if let Some(steps) = action.remove("steps") {
+            action.insert("path".into(), steps);
+        }
+        action.remove("scale");
+        action.insert("relative".into(), serde_json::Value::from(true));
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -91,7 +113,12 @@ impl Macro {
     }
 
     pub fn from_json(json: &str) -> Result<Self> {
-        let mut m: Macro = serde_json::from_str(json).context("parsing macro")?;
+        let mut value: serde_json::Value = serde_json::from_str(json).context("parsing macro")?;
+        let version = value.get("version").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        if version < 2 {
+            merge_relative_moves(&mut value);
+        }
+        let mut m: Macro = serde_json::from_value(value).context("parsing macro")?;
         m.migrate()?;
         Ok(m)
     }
@@ -249,6 +276,8 @@ mod tests {
             Action::TypeText { text: "héllo".into(), mode: TextMode::Unicode, char_delay_ms: 10 },
             Action::MouseMove {
                 path: vec![PathPoint { x: 1, y: 2, dt_ms: 0 }, PathPoint { x: 3, y: 4, dt_ms: 16 }],
+                relative: false,
+                time_scale: 1.0,
             },
             Action::MouseButton {
                 button: MouseButton::Right,
@@ -286,9 +315,10 @@ mod tests {
                 poll_ms: 250,
                 timeout_ms: 5000,
             },
-            Action::MouseMoveRelative {
-                steps: vec![PathPoint { x: 10, y: -5, dt_ms: 0 }, PathPoint { x: 4, y: 0, dt_ms: 8 }],
-                scale: 1.5,
+            Action::MouseMove {
+                path: vec![PathPoint { x: 10, y: -5, dt_ms: 0 }, PathPoint { x: 4, y: 0, dt_ms: 8 }],
+                relative: true,
+                time_scale: 1.5,
             },
             Action::WaitForFile { path: "C:/out/*.png".into(), timeout_ms: 60_000 },
             Action::Comment { text: "note".into() },
@@ -333,6 +363,38 @@ mod tests {
         assert!(m.items[0].enabled);
         assert_eq!(m.items[0].comment, "");
         assert_eq!(m.settings, MacroSettings::default());
+    }
+
+    #[test]
+    fn version_one_relative_moves_become_merged_moves() {
+        let json = r#"{"version":1,"items":[{"id":1,"action":{"type":"mouse_move_relative",
+            "steps":[{"x":10,"y":-5,"dt_ms":0}],"scale":1.5}}]}"#;
+        let m = Macro::from_json(json).unwrap();
+        assert_eq!(m.version, CURRENT_VERSION);
+        assert_eq!(
+            m.items[0].action,
+            Action::MouseMove {
+                path: vec![PathPoint { x: 10, y: -5, dt_ms: 0 }],
+                relative: true,
+                // The old spatial scale is dropped, the timing stays as recorded.
+                time_scale: 1.0,
+            }
+        );
+    }
+
+    #[test]
+    fn version_one_absolute_moves_keep_their_defaults() {
+        let json = r#"{"version":1,"items":[{"id":1,"action":{"type":"mouse_move",
+            "path":[{"x":3,"y":4,"dt_ms":0}]}}]}"#;
+        let m = Macro::from_json(json).unwrap();
+        assert_eq!(
+            m.items[0].action,
+            Action::MouseMove {
+                path: vec![PathPoint { x: 3, y: 4, dt_ms: 0 }],
+                relative: false,
+                time_scale: 1.0,
+            }
+        );
     }
 
     #[test]

@@ -96,7 +96,7 @@ fn script() -> Vec<Action> {
         Action::KeyPress { key: Key { vk: 0x48, scancode: 0x23, extended: false } },
         Action::KeyPress { key: Key { vk: 0x49, scancode: 0x17, extended: false } },
         Action::Wait { duration: 340.0, unit: TimeUnit::Ms },
-        Action::MouseMove { path: arc_path() },
+        Action::MouseMove { path: arc_path(), relative: false, time_scale: 1.0 },
         Action::MouseButton {
             button: MouseButton::Left,
             event: ButtonEvent::Click,
@@ -142,7 +142,7 @@ pub fn demo_doc() -> Macro {
             Action::TypeText { text: "hello from parrot".into(), mode: TextMode::Unicode, char_delay_ms: 12 },
             "typed with unicode events",
         ),
-        (Action::MouseMove { path: arc_path() }, ""),
+        (Action::MouseMove { path: arc_path(), relative: false, time_scale: 1.0 }, ""),
         (
             Action::MouseButton {
                 button: MouseButton::Left,
@@ -152,7 +152,10 @@ pub fn demo_doc() -> Macro {
             "click the target",
         ),
         (Action::MouseWheel { delta: -360, horizontal: false, pos: Some(Point::new(960, 540)) }, ""),
-        (Action::MouseMoveRelative { steps: turn_steps(), scale: 1.5 }, "turn the camera with raw deltas"),
+        (
+            Action::MouseMove { path: turn_steps(), relative: true, time_scale: 1.5 },
+            "turn the camera with raw deltas",
+        ),
         (
             Action::WaitForImage {
                 region: Rect::new(820, 460, 320, 200),

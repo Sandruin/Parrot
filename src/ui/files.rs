@@ -160,6 +160,7 @@ pub fn show_confirm(app: &mut App, ctx: &egui::Context) {
 
 fn reset(app: &mut App) {
     app.doc = Macro::default();
+    app.progress = None;
     app.path = None;
     app.dirty = false;
     app.select(None);
@@ -177,6 +178,7 @@ fn load(app: &mut App, path: &Path) {
         Ok(doc) => {
             let count = doc.items.len();
             app.doc = doc;
+            app.progress = None;
             app.path = Some(path.to_path_buf());
             app.dirty = false;
             app.select(None);

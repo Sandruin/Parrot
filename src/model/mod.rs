@@ -1,4 +1,4 @@
-mod action;
+pub mod action;
 pub mod b64;
 pub mod clipboard;
 mod hotkey;
@@ -8,8 +8,8 @@ mod messages;
 mod settings;
 
 pub use action::{
-    Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
-    TextMatch, TextMode, TimeUnit,
+    Action, ActionId, ActionItem, Axis, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point,
+    Rect, TextMatch, TextMode, TimeUnit,
 };
 pub use hotkey::{Hotkey, HotkeyAction, HotkeyConfig, modifiers};
 pub use key_names::{vk, vk_name};

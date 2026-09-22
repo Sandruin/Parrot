@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
 use egui::{Button, DragValue, Modal, RichText, Slider, TextEdit, Vec2};
+use egui_material_icons::icons;
 
-use super::{App, UiServices, action_list, keymap, region_picker, style};
+use super::{App, UiServices, action_list, keymap, overlay_scene, region_picker, style};
 use crate::engine::matcher;
 use crate::model::{
-    Action, ActionId, ActionItem, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point, Rect,
-    TextMatch, TextMode, TimeUnit,
+    Action, ActionId, ActionItem, Axis, ButtonEvent, ImageMatchMode, Key, MouseButton, PathPoint, Point,
+    Rect, TextMatch, TextMode, TimeUnit, action,
 };
 
 /// Grace period that lets the user switch to the window they want to capture.
@@ -64,6 +65,11 @@ impl Dialog {
             timeout_unit: TimeUnit::best_for(timeout_of(&item.action)),
             test: None,
         }
+    }
+
+    /// The action as edited so far, which the overlay previews while the dialog is open.
+    pub fn action(&self) -> &Action {
+        &self.action
     }
 
     /// Stores freshly picked template pixels, leaving the region as the area to search.
@@ -164,6 +170,11 @@ pub fn show(app: &mut App, ctx: &egui::Context) {
     if !captured && !picking && response.should_close() {
         cancel = true;
     }
+    // Enter accepts the dialog, unless a text field is using it for a newline or the key
+    // picker is waiting for one.
+    if !captured && !picking && !dialog.capture_key && !ctx.egui_wants_keyboard_input() {
+        commit |= ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
     if commit {
         if let Some(item) = app.doc.item_mut(dialog.id) {
             item.action = dialog.action.clone();
@@ -217,32 +228,7 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
                 ui.add(DragValue::new(char_delay_ms).range(0..=5_000).suffix(" ms"));
             });
         }
-        Action::MouseMove { path } => {
-            let mut end = path.last().copied().unwrap_or_default();
-            row(ui, "Endpoint", |ui| {
-                ui.add(DragValue::new(&mut end.x).prefix("x "));
-                ui.add(DragValue::new(&mut end.y).prefix("y "));
-            });
-            let mut straighten = false;
-            row(ui, "Path", |ui| {
-                ui.label(format!("{} points", path.len()));
-                if ui
-                    .add_enabled(path.len() > 1, Button::new("Straighten"))
-                    .on_hover_text("Drop the recorded path and jump straight to the endpoint")
-                    .clicked()
-                {
-                    straighten = true;
-                }
-            });
-            if straighten {
-                *path = vec![PathPoint { x: end.x, y: end.y, dt_ms: 0 }];
-            } else if let Some(last) = path.last_mut() {
-                last.x = end.x;
-                last.y = end.y;
-            } else {
-                path.push(PathPoint { x: end.x, y: end.y, dt_ms: 0 });
-            }
-        }
+        Action::MouseMove { path, relative, time_scale } => move_rows(ui, path, relative, time_scale),
         Action::MouseButton { button, event, pos } => {
             row(ui, "Button", |ui| {
                 combo(ui, "mouse_button", button, &MouseButton::ALL, |b| b.label().to_string());
@@ -346,7 +332,6 @@ fn fields(ui: &mut egui::Ui, ctx: &egui::Context, dialog: &mut Dialog, services:
             millis(ui, "Poll every", poll_ms);
             timeout_row(ui, "timeout_unit", timeout_ms, timeout_unit);
         }
-        Action::MouseMoveRelative { steps, scale } => relative_rows(ui, steps, scale),
         Action::WaitForFile { path, timeout_ms } => {
             row(ui, "Path", |ui| {
                 ui.add(TextEdit::singleline(path).hint_text("C:/out/render.png").desired_width(214.0));
@@ -473,40 +458,125 @@ fn regex_error(pattern: &str, case_sensitive: bool) -> Option<String> {
 }
 
 /// Editor for relative steps: read-only totals, a scale factor and hand editing of a single step.
-fn relative_rows(ui: &mut egui::Ui, steps: &mut Vec<PathPoint>, scale: &mut f32) {
-    let (dx, dy) = total_delta(steps);
-    let mut collapse = false;
-    row(ui, "Total", |ui| {
-        ui.label(format!("dx {dx:+}, dy {dy:+}"));
-        ui.weak("raw units");
+/// Editor for a mouse move in either flavour, including the conversion between them.
+fn move_rows(ui: &mut egui::Ui, path: &mut Vec<PathPoint>, relative: &mut bool, time_scale: &mut f32) {
+    let mut kind = *relative;
+    row(ui, "Coordinates", |ui| {
+        combo(ui, "move_kind", &mut kind, &[false, true], |r| {
+            if r { "Relative to cursor".into() } else { "Absolute position".into() }
+        });
     });
-    row(ui, "Steps", |ui| {
-        ui.label(format!("{}", steps.len()));
-        if ui
-            .add_enabled(steps.len() > 1, Button::new("Collapse to one step"))
-            .on_hover_text("Replace the recorded steps with a single step of the summed delta")
-            .on_disabled_hover_text("There is only one step already")
-            .clicked()
-        {
-            collapse = true;
+    if kind != *relative {
+        *path = if kind {
+            action::to_relative(path)
+        } else {
+            action::to_absolute(path, overlay_scene::cursor_pos())
+        };
+        *relative = kind;
+    }
+
+    if *relative {
+        delta_rows(ui, path);
+    } else {
+        endpoint_row(ui, path);
+    }
+    path_row(ui, path, *relative);
+
+    row(ui, "Time scale", |ui| {
+        ui.add(
+            DragValue::new(time_scale)
+                .range(0.1..=100.0)
+                .speed(0.05)
+                // egui derives the decimals from the drag speed, which would show 1x as 1.00x.
+                .custom_formatter(|value, _| {
+                    let text = format!("{value:.2}");
+                    format!("{}x", text.trim_end_matches('0').trim_end_matches('.'))
+                })
+                .custom_parser(|text| text.trim().trim_end_matches(['x', 'X']).parse().ok()),
+        )
+        .on_hover_text("Replays the recorded delays this much faster; 0.1x is ten times slower");
+    });
+    row(ui, "Mirror", |ui| {
+        if icon_button(ui, icons::ICON_SWAP_HORIZ, "Mirror the path left to right").clicked() {
+            action::mirror_path(path, *relative, Axis::Horizontal);
+        }
+        if icon_button(ui, icons::ICON_SWAP_VERT, "Mirror the path top to bottom").clicked() {
+            action::mirror_path(path, *relative, Axis::Vertical);
         }
     });
-    row(ui, "Scale", |ui| {
-        ui.add(DragValue::new(scale).range(0.1..=10.0).speed(0.02).fixed_decimals(2));
-        ui.weak(format!("sends {}, {}", (dx as f32 * *scale) as i64, (dy as f32 * *scale) as i64));
+}
+
+/// Icon-only button that explains itself on hover.
+fn icon_button(ui: &mut egui::Ui, glyph: egui_material_icons::MaterialIcon, hint: &str) -> egui::Response {
+    let button = Button::new(glyph.rich_text().size(17.0)).min_size(Vec2::new(34.0, 0.0));
+    ui.add(button).on_hover_text(hint)
+}
+
+/// Endpoint and point count of an absolute path.
+/// Screen position the cursor ends on; moving it takes the whole path along, keeping its shape.
+fn endpoint_row(ui: &mut egui::Ui, path: &mut Vec<PathPoint>) {
+    let before = path.last().copied().unwrap_or_default();
+    let mut end = before;
+    row(ui, "Endpoint", |ui| {
+        ui.add(DragValue::new(&mut end.x).prefix("x "));
+        ui.add(DragValue::new(&mut end.y).prefix("y "));
     });
-    if collapse {
-        *steps = vec![PathPoint { x: dx as i32, y: dy as i32, dt_ms: 0 }];
+    if path.is_empty() {
+        path.push(PathPoint { x: end.x, y: end.y, dt_ms: 0 });
+        return;
     }
-    if let [only] = steps.as_mut_slice() {
+    let (dx, dy) = (end.x - before.x, end.y - before.y);
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    for point in path.iter_mut() {
+        point.x = point.x.saturating_add(dx);
+        point.y = point.y.saturating_add(dy);
+    }
+}
+
+/// Net displacement of a relative move, editable once the path is a single step.
+fn delta_rows(ui: &mut egui::Ui, path: &mut [PathPoint]) {
+    if let [only] = path {
         row(ui, "Delta", |ui| {
             ui.add(DragValue::new(&mut only.x).range(-32_768..=32_768).prefix("dx "));
             ui.add(DragValue::new(&mut only.y).range(-32_768..=32_768).prefix("dy "));
         });
+        return;
     }
+    let (dx, dy) = total_delta(path);
+    row(ui, "Total", |ui| {
+        ui.label(format!("dx {dx:+}, dy {dy:+}"));
+    });
 }
 
-/// Net displacement of a relative move, before `scale` is applied.
+/// Point count plus the button that reduces the path to its net movement.
+fn path_row(ui: &mut egui::Ui, path: &mut Vec<PathPoint>, relative: bool) {
+    let mut straighten = false;
+    row(ui, "Path", |ui| {
+        ui.label(format!("{} points", path.len()));
+        if ui
+            .add_enabled(path.len() > 1, Button::new("Straighten"))
+            .on_hover_text("Drop the recorded path and keep only the movement it adds up to")
+            .on_disabled_hover_text("There is only one point already")
+            .clicked()
+        {
+            straighten = true;
+        }
+    });
+    if !straighten {
+        return;
+    }
+    *path = if relative {
+        let (dx, dy) = total_delta(path);
+        vec![PathPoint { x: dx as i32, y: dy as i32, dt_ms: 0 }]
+    } else {
+        let end = path.last().copied().unwrap_or_default();
+        vec![PathPoint { x: end.x, y: end.y, dt_ms: 0 }]
+    };
+}
+
+/// Net displacement of a relative move.
 fn total_delta(steps: &[PathPoint]) -> (i64, i64) {
     steps.iter().fold((0, 0), |(x, y), step| (x + step.x as i64, y + step.y as i64))
 }

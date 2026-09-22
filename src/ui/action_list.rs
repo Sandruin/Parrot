@@ -12,6 +12,8 @@ const W_INDEX: f32 = 34.0;
 const MIN_ACTION: f32 = 90.0;
 const MIN_COMMENT: f32 = 60.0;
 const MIN_VALUE: f32 = 110.0;
+/// Rows the page keys move the selection by.
+const PAGE: usize = 10;
 
 /// Width of the value column, which takes whatever the other columns leave.
 fn value_width(total: f32, spacing: f32, action: f32, comment: f32) -> f32 {
@@ -219,6 +221,35 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+/// Home, End and the page keys, each extending the selection when Shift is held.
+fn jumps(app: &mut App, ctx: &egui::Context) {
+    use egui::{Key, Modifiers};
+    if app.doc.items.is_empty() {
+        return;
+    }
+    let last = app.doc.items.len() - 1;
+    let from = app.selected_index().unwrap_or(0);
+    let targets = [
+        (Key::Home, 0),
+        (Key::End, last),
+        (Key::PageUp, from.saturating_sub(PAGE)),
+        (Key::PageDown, (from + PAGE).min(last)),
+    ];
+    for (key, target) in targets {
+        let extend = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, key));
+        if !extend && !ctx.input_mut(|i| i.consume_key(Modifiers::NONE, key)) {
+            continue;
+        }
+        let id = app.doc.items[target].id;
+        if extend {
+            app.extend_select(id);
+        } else {
+            app.select(Some(id));
+        }
+        app.scroll_to = Some(id);
+    }
+}
+
 /// Takes the clipboard events off the queue; egui turns Ctrl+X, Ctrl+C and Ctrl+V into these.
 fn clipboard_events(ctx: &egui::Context) -> (bool, bool, Option<String>) {
     let mut cut = false;
@@ -361,8 +392,13 @@ pub fn icon_for(action: &Action) -> MaterialIcon {
         Action::Wait { .. } => icons::ICON_SCHEDULE,
         Action::KeyDown { .. } | Action::KeyUp { .. } | Action::KeyPress { .. } => icons::ICON_KEYBOARD,
         Action::TypeText { .. } => icons::ICON_TEXT_FIELDS,
-        Action::MouseMove { .. } => icons::ICON_OPEN_WITH,
-        Action::MouseMoveRelative { .. } => icons::ICON_SPORTS_ESPORTS,
+        Action::MouseMove { relative, .. } => {
+            if *relative {
+                icons::ICON_SPORTS_ESPORTS
+            } else {
+                icons::ICON_OPEN_WITH
+            }
+        }
         Action::MouseButton { .. } => icons::ICON_ADS_CLICK,
         Action::MouseWheel { .. } => icons::ICON_MOUSE,
         Action::WindowActivate { .. } => icons::ICON_WINDOW,
@@ -379,6 +415,7 @@ fn shortcuts(app: &mut App, ctx: &egui::Context) {
     if app.keyboard_busy(ctx) {
         return;
     }
+    jumps(app, ctx);
     use egui::{Key, Modifiers};
     let keys = ctx.input_mut(|i| {
         [

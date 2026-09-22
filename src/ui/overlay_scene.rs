@@ -22,28 +22,18 @@ pub fn for_action(action: &Action) -> OverlayScene {
 pub fn for_action_from(action: &Action, cursor: Point) -> OverlayScene {
     let mut shapes = Vec::new();
     match action {
-        Action::MouseMove { path } => {
-            let Some(first) = path.first() else {
+        Action::MouseMove { path, relative, .. } => {
+            // A relative path is drawn from wherever the cursor is right now.
+            let points =
+                if *relative { relative_path(cursor, path) } else { path.iter().map(|p| p.pos()).collect() };
+            let Some(first) = points.first().copied() else {
                 return OverlayScene::default();
             };
-            let last = path.last().copied().unwrap_or(*first);
-            if path.len() > 1 {
-                shapes.push(OverlayShape::Polyline {
-                    points: path.iter().map(|p| p.pos()).collect(),
-                    color: PATH,
-                    width: 2.0,
-                });
-            }
-            shapes.push(OverlayShape::Circle { center: first.pos(), radius: 5.0, color: PATH, filled: true });
-            shapes.push(OverlayShape::Crosshair { center: last.pos(), size: 14, color: PATH });
-        }
-        Action::MouseMoveRelative { steps, scale } => {
-            let points = relative_path(cursor, steps, *scale);
-            let last = points.last().copied().unwrap_or(cursor);
+            let last = points.last().copied().unwrap_or(first);
             if points.len() > 1 {
                 shapes.push(OverlayShape::Polyline { points, color: PATH, width: 2.0 });
             }
-            shapes.push(OverlayShape::Circle { center: cursor, radius: 5.0, color: PATH, filled: true });
+            shapes.push(OverlayShape::Circle { center: first, radius: 5.0, color: PATH, filled: true });
             shapes.push(OverlayShape::Crosshair { center: last, size: 14, color: PATH });
         }
         Action::MouseButton { button, event, pos: Some(pos) } => {
@@ -74,14 +64,14 @@ pub fn for_action_from(action: &Action, cursor: Point) -> OverlayScene {
 }
 
 /// Screen positions the cursor passes through when the scaled steps are applied from `start`.
-fn relative_path(start: Point, steps: &[PathPoint], scale: f32) -> Vec<Point> {
+fn relative_path(start: Point, steps: &[PathPoint]) -> Vec<Point> {
     let mut points = Vec::with_capacity(steps.len() + 1);
     points.push(start);
-    let (mut x, mut y) = (start.x as f32, start.y as f32);
+    let (mut x, mut y) = (start.x, start.y);
     for step in steps {
-        x += step.x as f32 * scale;
-        y += step.y as f32 * scale;
-        points.push(Point::new(x.round() as i32, y.round() as i32));
+        x = x.saturating_add(step.x);
+        y = y.saturating_add(step.y);
+        points.push(Point::new(x, y));
     }
     points
 }
@@ -120,7 +110,11 @@ mod tests {
     use crate::model::{ButtonEvent, ImageMatchMode, Key, MouseButton, Rect, TimeUnit};
 
     fn path(points: &[(i32, i32)]) -> Action {
-        Action::MouseMove { path: points.iter().map(|&(x, y)| PathPoint { x, y, dt_ms: 8 }).collect() }
+        Action::MouseMove {
+            path: points.iter().map(|&(x, y)| PathPoint { x, y, dt_ms: 8 }).collect(),
+            relative: false,
+            time_scale: 1.0,
+        }
     }
 
     #[test]
@@ -177,18 +171,19 @@ mod tests {
     }
 
     #[test]
-    fn relative_steps_accumulate_from_the_start_and_scale() {
+    fn relative_steps_accumulate_from_the_start() {
         let steps = [PathPoint { x: 10, y: -5, dt_ms: 4 }, PathPoint { x: 10, y: -5, dt_ms: 4 }];
-        let points = relative_path(Point::new(100, 100), &steps, 2.0);
-        assert_eq!(points, vec![Point::new(100, 100), Point::new(120, 90), Point::new(140, 80)]);
-        assert_eq!(relative_path(Point::new(3, 4), &[], 1.0), vec![Point::new(3, 4)]);
+        let points = relative_path(Point::new(100, 100), &steps);
+        assert_eq!(points, vec![Point::new(100, 100), Point::new(110, 95), Point::new(120, 90)]);
+        assert_eq!(relative_path(Point::new(3, 4), &[]), vec![Point::new(3, 4)]);
     }
 
     #[test]
     fn relative_move_draws_path_from_the_cursor() {
-        let action = Action::MouseMoveRelative {
-            steps: vec![PathPoint { x: 40, y: 0, dt_ms: 0 }, PathPoint { x: 0, y: 40, dt_ms: 8 }],
-            scale: 0.5,
+        let action = Action::MouseMove {
+            path: vec![PathPoint { x: 20, y: 0, dt_ms: 0 }, PathPoint { x: 0, y: 20, dt_ms: 8 }],
+            relative: true,
+            time_scale: 1.0,
         };
         let scene = for_action_from(&action, Point::new(500, 400));
         assert_eq!(scene.shapes.len(), 3);
@@ -204,7 +199,7 @@ mod tests {
 
     #[test]
     fn a_single_relative_step_has_no_polyline() {
-        let action = Action::MouseMoveRelative { steps: Vec::new(), scale: 1.0 };
+        let action = Action::MouseMove { path: Vec::new(), relative: true, time_scale: 1.0 };
         let scene = for_action_from(&action, Point::new(1, 2));
         assert_eq!(scene.shapes.len(), 2);
         assert!(!scene.shapes.iter().any(|s| matches!(s, OverlayShape::Polyline { .. })));

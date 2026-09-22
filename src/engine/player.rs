@@ -173,15 +173,28 @@ impl Player {
                     }
                 }
             }
-            Action::MouseMove { path } => {
-                if settings.mouse_path == MousePathMode::Straight || path.len() == 1 {
+            Action::MouseMove { path, relative, time_scale } => {
+                // A higher time scale plays the recorded delays faster.
+                let timing = time_scale.max(0.01) as f64;
+                if *relative {
+                    for (i, step) in path.iter().enumerate() {
+                        if i > 0
+                            && let Flow::Stopped = self.wait(step.dt_ms as f64 / timing, sched)
+                        {
+                            return Ok(Flow::Stopped);
+                        }
+                        if step.x != 0 || step.y != 0 {
+                            self.deps.injector.mouse_move_rel(step.x, step.y)?;
+                        }
+                    }
+                } else if settings.mouse_path == MousePathMode::Straight || path.len() == 1 {
                     if let Some(last) = path.last() {
                         self.deps.injector.mouse_move_abs(last.pos())?;
                     }
                 } else {
                     for (i, point) in path.iter().enumerate() {
                         if i > 0
-                            && let Flow::Stopped = self.wait(point.dt_ms as f64, sched)
+                            && let Flow::Stopped = self.wait(point.dt_ms as f64 / timing, sched)
                         {
                             return Ok(Flow::Stopped);
                         }
@@ -265,27 +278,6 @@ impl Player {
                     return Ok(Flow::Stopped);
                 }
                 self.button(*button, false)?;
-            }
-            Action::MouseMoveRelative { steps, scale } => {
-                let scale = *scale as f64;
-                let mut carry_x = 0.0;
-                let mut carry_y = 0.0;
-                for (i, step) in steps.iter().enumerate() {
-                    if i > 0
-                        && let Flow::Stopped = self.wait(step.dt_ms as f64, sched)
-                    {
-                        return Ok(Flow::Stopped);
-                    }
-                    carry_x += step.x as f64 * scale;
-                    carry_y += step.y as f64 * scale;
-                    let dx = carry_x.round();
-                    let dy = carry_y.round();
-                    carry_x -= dx;
-                    carry_y -= dy;
-                    if dx != 0.0 || dy != 0.0 {
-                        self.deps.injector.mouse_move_rel(dx as i32, dy as i32)?;
-                    }
-                }
             }
             Action::WaitForFile { path, timeout_ms } => {
                 return self.wait_for_file(path, *timeout_ms, sched);

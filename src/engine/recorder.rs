@@ -264,15 +264,17 @@ impl Recorder {
         let Some(path) = self.open_path.take() else {
             return;
         };
-        let action = if self.opts.relative_mouse_moves {
+        let relative = self.opts.relative_mouse_moves;
+        let points = if relative {
             let steps = relative_steps(&path.points, path.origin);
             if steps.is_empty() {
                 return;
             }
-            Action::MouseMoveRelative { steps, scale: 1.0 }
+            steps
         } else {
-            Action::MouseMove { path: path.points }
+            path.points
         };
+        let action = Action::MouseMove { path: points, relative, time_scale: 1.0 };
         self.emit(out, path.start, path.last_at, action);
     }
 
@@ -405,7 +407,7 @@ mod tests {
         actions
             .iter()
             .find_map(|a| match a {
-                Action::MouseMove { path } => Some(path.clone()),
+                Action::MouseMove { path, .. } => Some(path.clone()),
                 _ => None,
             })
             .expect("a mouse move action")
@@ -447,9 +449,9 @@ mod tests {
         let mut s = stream();
         let out = s.mv(0, 0, 0).mv(5, 5, 100).mv(9, 9, 1200).finish();
         assert_eq!(out.len(), 3);
-        assert!(matches!(&out[0], Action::MouseMove { path } if path.len() == 2));
+        assert!(matches!(&out[0], Action::MouseMove { path, .. } if path.len() == 2));
         assert_eq!(out[1], wait(1100.0, TimeUnit::Ms));
-        assert!(matches!(&out[2], Action::MouseMove { path } if path.len() == 1));
+        assert!(matches!(&out[2], Action::MouseMove { path, .. } if path.len() == 1));
     }
 
     #[test]
@@ -462,7 +464,7 @@ mod tests {
         let lengths: Vec<usize> = out
             .iter()
             .filter_map(|a| match a {
-                Action::MouseMove { path } => Some(path.len()),
+                Action::MouseMove { path, .. } => Some(path.len()),
                 _ => None,
             })
             .collect();
@@ -537,7 +539,11 @@ mod tests {
                     event: ButtonEvent::Down,
                     pos: Some(Point::new(100, 100)),
                 },
-                Action::MouseMove { path: vec![PathPoint { x: 150, y: 150, dt_ms: 0 }] },
+                Action::MouseMove {
+                    path: vec![PathPoint { x: 150, y: 150, dt_ms: 0 }],
+                    relative: false,
+                    time_scale: 1.0,
+                },
                 wait(190.0, TimeUnit::Ms),
                 Action::MouseButton {
                     button: MouseButton::Left,
@@ -717,7 +723,7 @@ mod tests {
         assert!(s.out.is_empty());
         let out = s.finish();
         assert_eq!(out.len(), 1);
-        assert!(matches!(&out[0], Action::MouseMove { path } if path.len() == 2));
+        assert!(matches!(&out[0], Action::MouseMove { path, .. } if path.len() == 2));
 
         let mut s = stream();
         s.key(A, true, 0);
@@ -732,7 +738,7 @@ mod tests {
         actions
             .iter()
             .filter_map(|a| match a {
-                Action::MouseMoveRelative { steps, .. } => Some(steps.clone()),
+                Action::MouseMove { path, relative: true, .. } => Some(path.clone()),
                 _ => None,
             })
             .collect()
@@ -744,9 +750,10 @@ mod tests {
         let out = s.mv(100, 100, 0).mv(110, 105, 20).mv(115, 105, 40).finish();
         assert_eq!(
             out,
-            vec![Action::MouseMoveRelative {
-                steps: vec![PathPoint { x: 10, y: 5, dt_ms: 20 }, PathPoint { x: 5, y: 0, dt_ms: 20 },],
-                scale: 1.0,
+            vec![Action::MouseMove {
+                path: vec![PathPoint { x: 10, y: 5, dt_ms: 20 }, PathPoint { x: 5, y: 0, dt_ms: 20 }],
+                relative: true,
+                time_scale: 1.0,
             }]
         );
     }
@@ -818,7 +825,11 @@ mod tests {
                     event: ButtonEvent::Down,
                     pos: Some(Point::new(100, 100)),
                 },
-                Action::MouseMoveRelative { steps: vec![PathPoint { x: 50, y: 50, dt_ms: 0 }], scale: 1.0 },
+                Action::MouseMove {
+                    path: vec![PathPoint { x: 50, y: 50, dt_ms: 0 }],
+                    relative: true,
+                    time_scale: 1.0,
+                },
                 wait(190.0, TimeUnit::Ms),
                 Action::MouseButton {
                     button: MouseButton::Left,

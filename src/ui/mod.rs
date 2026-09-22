@@ -433,6 +433,7 @@ impl App {
             EngineEvent::RecordingStarted => {
                 self.mode = Mode::Recording;
                 self.recorded = 0;
+                self.progress = None;
                 // The mode label already says Recording, so leave the message area empty.
                 self.status = Status::default();
             }
@@ -466,15 +467,19 @@ impl App {
             EngineEvent::PlaybackFinished(outcome) => {
                 self.mode = Mode::Idle;
                 self.running = None;
-                self.progress = None;
+                // The progress is kept so the status bar still says where the run ended.
+                let at = self.progress.map_or_else(String::new, |p| {
+                    format!(" at step {} of {}, iteration {}", p.index + 1, p.total, p.iteration)
+                });
                 match outcome {
-                    PlaybackOutcome::Completed => self.info("Playback completed"),
-                    PlaybackOutcome::StoppedByUser => self.info("Playback stopped"),
+                    PlaybackOutcome::Completed => self.info(format!("Playback completed{at}")),
+                    PlaybackOutcome::StoppedByUser => self.info(format!("Playback stopped{at}")),
                     PlaybackOutcome::InterruptedByUserInput => {
-                        self.info("Playback interrupted by user input")
+                        self.info(format!("Playback interrupted by user input{at}"))
                     }
                     PlaybackOutcome::Failed { index, error } => {
-                        self.error(format!("Action {} failed: {error}", index + 1))
+                        let iteration = self.progress.map_or(1, |p| p.iteration);
+                        self.error(format!("Action {} failed in iteration {iteration}: {error}", index + 1))
                     }
                 }
             }
@@ -489,11 +494,12 @@ impl App {
 
     /// Mirrors the selection to the overlay, hiding it while recording or playing.
     fn sync_overlay(&mut self) {
+        // While the properties dialog is open it owns the action being looked at, so its
+        // unsaved edits drive the overlay and the preview follows every change.
+        let edited = self.dialog.as_ref().map(|dialog| dialog.action());
+        let selected = self.selected.and_then(|id| self.doc.item(id)).map(|item| &item.action);
         let wanted = if self.settings.show_overlay && !self.mode.is_busy() {
-            self.selected
-                .and_then(|id| self.doc.item(id))
-                .filter(|item| item.action.is_positional())
-                .map(|item| item.action.clone())
+            edited.or(selected).filter(|action| action.is_positional()).cloned()
         } else {
             None
         };
@@ -517,7 +523,7 @@ impl App {
 
     /// Redraws the relative-move overlay as the cursor wanders, since its path starts there.
     fn follow_cursor(&mut self, ctx: &egui::Context) {
-        let Some(action @ Action::MouseMoveRelative { .. }) = self.overlay_sent.clone() else {
+        let Some(action @ Action::MouseMove { relative: true, .. }) = self.overlay_sent.clone() else {
             return;
         };
         ctx.request_repaint_after(CURSOR_INTERVAL);
